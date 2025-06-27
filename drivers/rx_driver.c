@@ -174,7 +174,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             byte_count = 0;
             data_ptr = image_buffer;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
-        } else if (byte_count == header.data_length) {
+        } else if (byte_count == header.data_length && data_ptr == image_buffer + header.data_length) {
             pr_info("RX: Data received (%u bytes), sending ACK, waiting for CRC32\n", 
                    header.data_length);
             send_ack();
