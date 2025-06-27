@@ -202,19 +202,34 @@ static int epaper_tx_probe(struct platform_device *pdev) {
     int ret;
     
     clock_gpio = devm_gpiod_get(&pdev->dev, "clock", GPIOD_OUT_LOW);
-    if (IS_ERR(clock_gpio)) return PTR_ERR(clock_gpio);
+    if (IS_ERR(clock_gpio)) {
+        dev_err(&pdev->dev, "Failed to get clock GPIO: %ld\n", PTR_ERR(clock_gpio));
+        return PTR_ERR(clock_gpio);
+    }
     
     data_gpio = devm_gpiod_get(&pdev->dev, "data", GPIOD_OUT_LOW);
-    if (IS_ERR(data_gpio)) return PTR_ERR(data_gpio);
+    if (IS_ERR(data_gpio)) {
+        dev_err(&pdev->dev, "Failed to get data GPIO: %ld\n", PTR_ERR(data_gpio));
+        return PTR_ERR(data_gpio);
+    }
     
     start_stop_gpio = devm_gpiod_get(&pdev->dev, "start-stop", GPIOD_OUT_LOW);
-    if (IS_ERR(start_stop_gpio)) return PTR_ERR(start_stop_gpio);
+    if (IS_ERR(start_stop_gpio)) {
+        dev_err(&pdev->dev, "Failed to get start-stop GPIO: %ld\n", PTR_ERR(start_stop_gpio));
+        return PTR_ERR(start_stop_gpio);
+    }
     
     ack_gpio = devm_gpiod_get(&pdev->dev, "ack", GPIOD_IN);
-    if (IS_ERR(ack_gpio)) return PTR_ERR(ack_gpio);
+    if (IS_ERR(ack_gpio)) {
+        dev_err(&pdev->dev, "Failed to get ack GPIO: %ld\n", PTR_ERR(ack_gpio));
+        return PTR_ERR(ack_gpio);
+    }
     
     nack_gpio = devm_gpiod_get(&pdev->dev, "nack", GPIOD_IN);
-    if (IS_ERR(nack_gpio)) return PTR_ERR(nack_gpio);
+    if (IS_ERR(nack_gpio)) {
+        dev_err(&pdev->dev, "Failed to get nack GPIO: %ld\n", PTR_ERR(nack_gpio));
+        return PTR_ERR(nack_gpio);
+    }
     
     ack_irq = gpiod_to_irq(ack_gpio);
     if (ack_irq < 0) return ack_irq;

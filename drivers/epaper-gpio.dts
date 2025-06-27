@@ -9,11 +9,11 @@
         __overlay__ {
             epaper_tx: epaper_tx_device {
                 compatible = "epaper,gpio-tx";
-                clock-gpios = <&gpio 13 0>;        // Clock output
-                data-gpios = <&gpio 5 0>;          // Data output  
-                start-stop-gpios = <&gpio 6 0>;    // Start/Stop output
-                ack-gpios = <&gpio 16 0>;          // ACK input
-                nack-gpios = <&gpio 12 0>;         // NACK input
+                clock-gpios = <&gpio 13 0>;
+                data-gpios = <&gpio 5 0>;
+                start-stop-gpios = <&gpio 6 0>;
+                ack-gpios = <&gpio 16 0>;
+                nack-gpios = <&gpio 12 0>;
                 status = "okay";
             };
         };
@@ -24,11 +24,11 @@
         __overlay__ {
             epaper_rx: epaper_rx_device {
                 compatible = "epaper,gpio-rx";
-                clock-gpios = <&gpio 21 0>;        // Clock input
-                data-gpios = <&gpio 19 0>;         // Data input
-                start-stop-gpios = <&gpio 26 0>;   // Start/Stop input
-                ack-gpios = <&gpio 25 0>;          // ACK output
-                nack-gpios = <&gpio 20 0>;         // NACK output
+                clock-gpios = <&gpio 21 0>;
+                data-gpios = <&gpio 19 0>;
+                start-stop-gpios = <&gpio 26 0>;
+                ack-gpios = <&gpio 25 0>;
+                nack-gpios = <&gpio 20 0>;
                 status = "okay";
             };
         };
