@@ -177,14 +177,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             data_ptr = image_buffer;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
             
-        } else if (data_ptr >= image_buffer && data_ptr < image_buffer + header.data_length) {
-            if (byte_count != header.data_length) {
-                pr_warn("RX: Incomplete data: %u != %u bytes, sending NACK\n", 
-                       byte_count, header.data_length);
-                send_nack();
-                return IRQ_HANDLED;
-            }
-            
+        } else if (data_ptr == image_buffer + header.data_length && byte_count == header.data_length) {
             pr_info("RX: Data received (%u bytes), sending ACK, waiting for CRC32\n", 
                    header.data_length);
             send_ack();
@@ -194,7 +187,8 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             data_ptr = image_buffer + header.data_length;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
             
-        } else if (data_ptr >= image_buffer + header.data_length) {
+        } else if (data_ptr == image_buffer + header.data_length + sizeof(u32) && 
+                   byte_count == sizeof(u32)) {
             if (byte_count != sizeof(u32)) {
                 pr_warn("RX: Incomplete CRC32: %u != %zu bytes, sending NACK\n", 
                        byte_count, sizeof(u32));

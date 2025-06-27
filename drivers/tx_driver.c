@@ -221,7 +221,7 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
             break;
         }
         
-        pr_debug("Sending image data (%u bytes)\n", header.data_length);
+        pr_info("Sending image data (%u bytes)\n", header.data_length);
         ret = send_data_block(buffer + sizeof(header), header.data_length);
         if (ret) {
             pr_warn("Data send failed: %d\n", ret);
@@ -229,7 +229,8 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
             break;
         }
         
-        pr_debug("Sending CRC32 (%zu bytes)\n", sizeof(crc32_val));
+        pr_info("Data sent successfully, now sending CRC32 (%zu bytes): 0x%08x\n", 
+               sizeof(crc32_val), crc32_val);
         ret = send_data_block((u8*)&crc32_val, sizeof(crc32_val));
         if (ret == 0) {
             pr_info("Transmission successful on attempt %d\n", retry + 1);
