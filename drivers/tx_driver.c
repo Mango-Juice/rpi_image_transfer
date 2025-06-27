@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
@@ -11,8 +12,6 @@
 #include <linux/wait.h>
 #include <linux/interrupt.h>
 #include <linux/crc32.h>
-#include <linux/platform_device.h>
-#include <linux/of.h>
 
 #define EPAPER_TX_MAGIC 'E'
 #define EPAPER_TX_GET_STATUS    _IOR(EPAPER_TX_MAGIC, 1, struct tx_status_info)
@@ -47,13 +46,12 @@ struct tx_statistics {
 #define DATA_PIN_COUNT 3
 #define HANDSHAKE_SYN 0x16
 
-static const struct of_device_id epaper_tx_of_match[] = {
-    { .compatible = "epaper,gpio-tx" },
-    { /* sentinel */ }
-};
-MODULE_DEVICE_TABLE(of, epaper_tx_of_match);
-
-static struct device *tx_gpio_dev;
+/* GPIO pin definitions */
+#define DATA_GPIO_0 17
+#define DATA_GPIO_1 27
+#define DATA_GPIO_2 22
+#define CLOCK_GPIO  23
+#define ACK_GPIO    24
 
 struct tx_packet {
     u8 seq_num;
@@ -101,9 +99,8 @@ static int tx_open(struct inode *inode, struct file *filp);
 static int tx_release(struct inode *inode, struct file *filp);
 static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count, loff_t *off);
 static long tx_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-static int init_gpio_pins(struct device *dev);
-static int epaper_tx_probe(struct platform_device *pdev);
-static void epaper_tx_remove(struct platform_device *pdev);
+static int init_gpio_pins(void);
+static void cleanup_gpio_pins(void);
 
 static void reset_tx_state(void) {
     current_state.transmission_active = false;
@@ -432,38 +429,72 @@ static const struct file_operations tx_fops = {
     .unlocked_ioctl = tx_ioctl,
 };
 
-static int init_gpio_pins(struct device *dev) {
+static int init_gpio_pins(void) {
     int ret, i;
-    
-    if (!dev) {
-        pr_err("[epaper_tx] No device provided\n");
-        return -ENODEV;
-    }
+    int data_pins[DATA_PIN_COUNT] = {DATA_GPIO_0, DATA_GPIO_1, DATA_GPIO_2};
     
     for (i = 0; i < DATA_PIN_COUNT; i++) {
-        data_gpio[i] = gpiod_get_index(dev, "data", i, GPIOD_OUT_LOW);
-        if (IS_ERR(data_gpio[i])) {
-            pr_err("[epaper_tx] Failed to get data GPIO %d: %ld\n", 
-                   i, PTR_ERR(data_gpio[i]));
-            ret = PTR_ERR(data_gpio[i]);
-            data_gpio[i] = NULL;
+        ret = gpio_request(data_pins[i], "epaper_data");
+        if (ret) {
+            pr_err("[epaper_tx] Failed to request data GPIO %d: %d\n", data_pins[i], ret);
+            goto cleanup_data_gpios;
+        }
+        
+        ret = gpio_direction_output(data_pins[i], 0);
+        if (ret) {
+            pr_err("[epaper_tx] Failed to set data GPIO %d as output: %d\n", data_pins[i], ret);
+            gpio_free(data_pins[i]);
+            goto cleanup_data_gpios;
+        }
+        
+        data_gpio[i] = gpio_to_desc(data_pins[i]);
+        if (!data_gpio[i]) {
+            pr_err("[epaper_tx] Failed to get descriptor for data GPIO %d\n", data_pins[i]);
+            gpio_free(data_pins[i]);
+            ret = -ENODEV;
             goto cleanup_data_gpios;
         }
     }
     
-    clock_gpio = gpiod_get(dev, "clock", GPIOD_OUT_LOW);
-    if (IS_ERR(clock_gpio)) {
-        pr_err("[epaper_tx] Failed to get clock GPIO: %ld\n", PTR_ERR(clock_gpio));
-        ret = PTR_ERR(clock_gpio);
-        clock_gpio = NULL;
+    ret = gpio_request(CLOCK_GPIO, "epaper_clock");
+    if (ret) {
+        pr_err("[epaper_tx] Failed to request clock GPIO: %d\n", ret);
         goto cleanup_data_gpios;
     }
     
-    ack_gpio = gpiod_get(dev, "ack", GPIOD_IN);
-    if (IS_ERR(ack_gpio)) {
-        pr_err("[epaper_tx] Failed to get ACK GPIO: %ld\n", PTR_ERR(ack_gpio));
-        ret = PTR_ERR(ack_gpio);
-        ack_gpio = NULL;
+    ret = gpio_direction_output(CLOCK_GPIO, 0);
+    if (ret) {
+        pr_err("[epaper_tx] Failed to set clock GPIO as output: %d\n", ret);
+        gpio_free(CLOCK_GPIO);
+        goto cleanup_data_gpios;
+    }
+    
+    clock_gpio = gpio_to_desc(CLOCK_GPIO);
+    if (!clock_gpio) {
+        pr_err("[epaper_tx] Failed to get descriptor for clock GPIO\n");
+        gpio_free(CLOCK_GPIO);
+        ret = -ENODEV;
+        goto cleanup_data_gpios;
+    }
+    
+    ret = gpio_request(ACK_GPIO, "epaper_ack");
+    if (ret) {
+        pr_err("[epaper_tx] Failed to request ACK GPIO: %d\n", ret);
+        goto cleanup_clock_gpio;
+    }
+    
+    ret = gpio_direction_input(ACK_GPIO);
+    if (ret) {
+        pr_err("[epaper_tx] Failed to set ACK GPIO as input: %d\n", ret);
+        gpio_free(ACK_GPIO);
+        goto cleanup_clock_gpio;
+    }
+    
+    ack_gpio = gpio_to_desc(ACK_GPIO);
+    if (!ack_gpio) {
+        pr_err("[epaper_tx] Failed to get descriptor for ACK GPIO\n");
+        gpio_free(ACK_GPIO);
+        ret = -ENODEV;
         goto cleanup_clock_gpio;
     }
     
@@ -472,27 +503,50 @@ static int init_gpio_pins(struct device *dev) {
     
 cleanup_clock_gpio:
     if (clock_gpio) {
-        gpiod_put(clock_gpio);
+        gpio_free(CLOCK_GPIO);
         clock_gpio = NULL;
     }
 cleanup_data_gpios:
     for (i = 0; i < DATA_PIN_COUNT; i++) {
         if (data_gpio[i]) {
-            gpiod_put(data_gpio[i]);
+            int pin_num = desc_to_gpio(data_gpio[i]);
+            gpio_free(pin_num);
             data_gpio[i] = NULL;
         }
     }
     return ret;
 }
 
-static int epaper_tx_probe(struct platform_device *pdev) {
+static void cleanup_gpio_pins(void) {
+    int i;
+    
+    if (ack_gpio) {
+        gpio_free(ACK_GPIO);
+        ack_gpio = NULL;
+    }
+    
+    if (clock_gpio) {
+        gpio_free(CLOCK_GPIO);
+        clock_gpio = NULL;
+    }
+    
+    for (i = 0; i < DATA_PIN_COUNT; i++) {
+        if (data_gpio[i]) {
+            int pin_num = desc_to_gpio(data_gpio[i]);
+            gpio_free(pin_num);
+            data_gpio[i] = NULL;
+        }
+    }
+    
+    pr_info("[epaper_tx] GPIO cleanup complete\n");
+}
+
+static int __init tx_driver_init(void) {
     int ret, irq;
     
-    pr_info("[epaper_tx] Probing platform device\n");
+    pr_info("[epaper_tx] Initializing TX driver\n");
     
-    tx_gpio_dev = &pdev->dev;
-    
-    ret = init_gpio_pins(&pdev->dev);
+    ret = init_gpio_pins();
     if (ret) {
         pr_err("[epaper_tx] GPIO initialization failed: %d\n", ret);
         return ret;
@@ -542,7 +596,7 @@ static int epaper_tx_probe(struct platform_device *pdev) {
         goto cleanup_class;
     }
     
-    pr_info("[epaper_tx] Platform device probed successfully\n");
+    pr_info("[epaper_tx] Driver initialized successfully - /dev/%s created\n", DEVICE_NAME);
     return 0;
     
 cleanup_class:
@@ -554,54 +608,25 @@ cleanup_chrdev:
 cleanup_irq:
     free_irq(irq, NULL);
 cleanup_gpio:
+    cleanup_gpio_pins();
     return ret;
 }
 
-static void epaper_tx_remove(struct platform_device *pdev) {
-    int i;
+static void __exit tx_driver_exit(void) {
+    int irq;
     
     device_destroy(tx_class, dev_num);
     class_destroy(tx_class);
     cdev_del(&tx_cdev);
     unregister_chrdev_region(dev_num, 1);
     
-    free_irq(gpiod_to_irq(ack_gpio), NULL);
-    
-    for (i = 0; i < DATA_PIN_COUNT; i++) {
-        if (data_gpio[i]) {
-            gpiod_put(data_gpio[i]);
-            data_gpio[i] = NULL;
-        }
-    }
-    if (clock_gpio) {
-        gpiod_put(clock_gpio);
-        clock_gpio = NULL;
-    }
-    if (ack_gpio) {
-        gpiod_put(ack_gpio);
-        ack_gpio = NULL;
+    irq = gpiod_to_irq(ack_gpio);
+    if (irq > 0) {
+        free_irq(irq, NULL);
     }
     
-    pr_info("[epaper_tx] Platform device removed\n");
-}
-
-static struct platform_driver epaper_tx_platform_driver = {
-    .probe = epaper_tx_probe,
-    .remove = epaper_tx_remove,
-    .driver = {
-        .name = "epaper-gpio-tx",
-        .of_match_table = epaper_tx_of_match,
-    },
-};
-
-static int __init tx_driver_init(void) {
-    pr_info("[epaper_tx] Initializing TX driver\n");
+    cleanup_gpio_pins();
     
-    return platform_driver_register(&epaper_tx_platform_driver);
-}
-
-static void __exit tx_driver_exit(void) {
-    platform_driver_unregister(&epaper_tx_platform_driver);
     pr_info("[epaper_tx] TX driver unloaded\n");
 }
 

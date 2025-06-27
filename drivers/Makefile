@@ -19,7 +19,7 @@ install: all dtbo
 	sudo cp epaper-gpio.dtbo /boot/overlays/
 	@if ! grep -q "dtoverlay=epaper-gpio" /boot/config.txt 2>/dev/null; then \
 		echo "dtoverlay=epaper-gpio" | sudo tee -a /boot/config.txt; \
-		echo "REBOOTING REQUIRED!: sudo reboot"; \
+		echo "!!!!!! REBOOTING REQUIRED !!!!!!: sudo reboot"; \
 	fi
 	sudo chmod 666 /dev/epaper_tx /dev/epaper_rx 2>/dev/null || true
 
