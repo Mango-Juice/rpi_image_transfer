@@ -134,7 +134,6 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         bit_count = 0;
         current_byte = 0;
         
-        // Set data_ptr based on current state
         if (current_rx_state == RX_STATE_HEADER) {
             data_ptr = (u8*)&header;
         } else if (current_rx_state == RX_STATE_DATA) {
@@ -156,7 +155,6 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         receiving_data = false;
         
         if (current_rx_state == RX_STATE_HEADER) {
-            // Receiving header
             if (byte_count < sizeof(header)) {
                 pr_warn("RX: Incomplete header: %u < %zu bytes, sending NACK\n", 
                        byte_count, sizeof(header));
@@ -201,7 +199,6 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             current_rx_state = RX_STATE_DATA;
             
         } else if (current_rx_state == RX_STATE_DATA) {
-            // Receiving data
             if (byte_count != header.data_length) {
                 pr_warn("RX: Incomplete data: %u != %u bytes, sending NACK\n", 
                        byte_count, header.data_length);
@@ -217,7 +214,6 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             current_rx_state = RX_STATE_CRC32;
             
         } else if (current_rx_state == RX_STATE_CRC32) {
-            // Receiving CRC32
             if (byte_count != sizeof(u32)) {
                 pr_warn("RX: Incomplete CRC32: %u != %zu bytes, sending NACK\n", 
                        byte_count, sizeof(u32));
@@ -241,12 +237,12 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                 pr_warn("RX: CRC32 mismatch, sending NACK\n");
                 send_nack();
             }
-            current_rx_state = RX_STATE_HEADER; // Reset for next transmission
+            current_rx_state = RX_STATE_HEADER;
             
         } else {
             pr_warn("RX: Unknown rx_state: %d, byte_count=%u\n", current_rx_state, byte_count);
             send_nack();
-            current_rx_state = RX_STATE_HEADER; // Reset for next transmission
+            current_rx_state = RX_STATE_HEADER;
         }
     }
     
@@ -313,7 +309,7 @@ static ssize_t rx_read(struct file *file, char __user *user_buffer, size_t count
 
 static long rx_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     switch (cmd) {
-    case 0x1001: // Reset
+    case 0x1001:
         reset_rx_state();
         if (image_buffer) {
             kfree(image_buffer);
@@ -321,7 +317,7 @@ static long rx_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
         }
         image_ready = false;
         return 0;
-    case 0x1002: // Get status
+    case 0x1002:
         return image_ready ? 1 : 0;
     default:
         return -ENOTTY;
