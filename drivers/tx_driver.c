@@ -394,7 +394,6 @@ static void ack_detection_timeout(struct timer_list *t) {
     
     pr_info("[epaper_tx] *** ACK PROCESSED (timeout) *** - wakeup sent to waiting thread\n");
 }
-}
 
 static int perform_handshake(void) {
     int retry, ret;
