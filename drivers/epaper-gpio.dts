@@ -9,10 +9,11 @@
         __overlay__ {
             epaper_tx: epaper_tx_device {
                 compatible = "epaper,gpio-tx";
-                /* TX 파이에서 사용할 GPIO 핀들 (새로운 핀 조합) */
-                data-gpios = <&gpio 5 0>, <&gpio 6 0>, <&gpio 12 0>; // DATA0, DATA1, DATA2
-                clock-gpios = <&gpio 13 0>; // CLOCK
-                ack-gpios = <&gpio 16 0>;   // ACK (입력)
+                clock-gpios = <&gpio 13 0>;        // Clock output
+                data-gpios = <&gpio 5 0>;          // Data output  
+                start-stop-gpios = <&gpio 6 0>;    // Start/Stop output
+                ack-gpios = <&gpio 16 0>;          // ACK input
+                nack-gpios = <&gpio 12 0>;         // NACK input
                 status = "okay";
             };
         };
@@ -22,11 +23,12 @@
         target-path = "/";
         __overlay__ {
             epaper_rx: epaper_rx_device {
-                compatible = "epaper,gpio-driver";
-                /* RX 파이에서 사용할 GPIO 핀들 (새로운 핀 조합) */
-                rx-data-gpios = <&gpio 19 0>, <&gpio 26 0>, <&gpio 20 0>; // DATA0, DATA1, DATA2 (입력)
-                rx-clock-gpios = <&gpio 21 0>; // CLOCK (입력)
-                rx-ack-gpios = <&gpio 25 0>;   // ACK (출력)
+                compatible = "epaper,gpio-rx";
+                clock-gpios = <&gpio 21 0>;        // Clock input
+                data-gpios = <&gpio 19 0>;         // Data input
+                start-stop-gpios = <&gpio 26 0>;   // Start/Stop input
+                ack-gpios = <&gpio 25 0>;          // ACK output
+                nack-gpios = <&gpio 20 0>;         // NACK output
                 status = "okay";
             };
         };

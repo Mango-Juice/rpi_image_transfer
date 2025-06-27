@@ -26,4 +26,8 @@ install: all dtbo
 uninstall:
 	sudo rmmod rx_driver tx_driver 2>/dev/null || true
 
-.PHONY: all clean install uninstall dtbo
+test:
+	sudo modinfo ./tx_driver.ko
+	sudo modinfo ./rx_driver.ko
+
+.PHONY: all clean install uninstall dtbo test
