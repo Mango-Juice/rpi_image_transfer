@@ -80,7 +80,7 @@ static void timeout_handler(struct timer_list *t) {
 }
 
 static void reset_rx_state(void) {
-    del_timer_sync(&timeout_timer);
+    del_timer(&timeout_timer);  // Use del_timer() since this can be called from interrupt context
     receiving_data = false;
     bit_count = 0;
     byte_count = 0;
@@ -123,7 +123,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         timer_setup(&timeout_timer, timeout_handler, 0);
         mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
     } else {
-        del_timer_sync(&timeout_timer);
+        del_timer(&timeout_timer);  // Use del_timer() instead of del_timer_sync() in interrupt context
         receiving_data = false;
         
         if (byte_count < sizeof(header)) {
@@ -346,9 +346,11 @@ err_irq:
 }
 
 static void epaper_rx_remove(struct platform_device *pdev) {
-    reset_rx_state();
+    del_timer_sync(&timeout_timer);  // Safe to use del_timer_sync() in non-interrupt context
+    receiving_data = false;
     if (image_buffer) {
         kfree(image_buffer);
+        image_buffer = NULL;
     }
     device_destroy(rx_class, dev_num);
     class_destroy(rx_class);
