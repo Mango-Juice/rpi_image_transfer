@@ -156,25 +156,37 @@ static bool verify_crc32(struct rx_packet *packet) {
 }
 
 static void send_ack(bool success) {
-    int ack_value = success ? 1 : 0;
     int initial_gpio, final_gpio;
     
     initial_gpio = gpiod_get_value(ack_gpio);
     
     pr_info("[epaper_rx] === SENDING %s for seq %d ===\n", 
              success ? "ACK" : "NACK", current_packet.seq_num);
-    pr_info("[epaper_rx] ACK GPIO before: %d, setting to: %d\n", initial_gpio, ack_value);
+    pr_info("[epaper_rx] ACK GPIO before: %d\n", initial_gpio);
     
     // Make sure GPIO starts LOW
     gpiod_set_value(ack_gpio, 0);
     mdelay(2);
     
-    // Send the ACK/NACK pulse
-    gpiod_set_value(ack_gpio, ack_value);
-    mdelay(15);  // Increased pulse width for better detection
-    gpiod_set_value(ack_gpio, 0);
-    mdelay(2);
+    if (success) {
+        // ACK: Single HIGH pulse
+        gpiod_set_value(ack_gpio, 1);
+        mdelay(15);
+        gpiod_set_value(ack_gpio, 0);
+        pr_info("[epaper_rx] ACK sent: HIGH pulse\n");
+    } else {
+        // NACK: Double pulse pattern (HIGH-LOW-HIGH)
+        gpiod_set_value(ack_gpio, 1);
+        mdelay(5);
+        gpiod_set_value(ack_gpio, 0);
+        mdelay(5);
+        gpiod_set_value(ack_gpio, 1);
+        mdelay(5);
+        gpiod_set_value(ack_gpio, 0);
+        pr_info("[epaper_rx] NACK sent: Double pulse pattern\n");
+    }
     
+    mdelay(2);
     final_gpio = gpiod_get_value(ack_gpio);
     pr_info("[epaper_rx] %s sent, ACK GPIO after: %d\n", 
             success ? "ACK" : "NACK", final_gpio);

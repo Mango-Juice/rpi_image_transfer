@@ -49,7 +49,7 @@ struct tx_statistics {
 
 static const struct of_device_id epaper_tx_of_match[] = {
     { .compatible = "epaper,gpio-tx" },
-    { /* sentinel */ }
+    { }
 };
 MODULE_DEVICE_TABLE(of, epaper_tx_of_match);
 
@@ -88,6 +88,9 @@ static u8 sequence_number = 0;
 static struct tx_state current_state = {0};
 static struct tx_statistics tx_stats = {0};
 
+/* Timer for ACK/NACK detection */
+static struct timer_list ack_detection_timer;
+
 /* Function declarations */
 static void reset_tx_state(void);
 static u32 calculate_crc32(struct tx_packet *packet);
@@ -96,6 +99,7 @@ static void send_byte(u8 byte);
 static int wait_for_ack(void);
 static int send_packet(struct tx_packet *packet);
 static irqreturn_t ack_irq_handler(int irq, void *dev_id);
+static void ack_detection_timeout(struct timer_list *t);
 static int perform_handshake(void);
 static int tx_open(struct inode *inode, struct file *filp);
 static int tx_release(struct inode *inode, struct file *filp);
@@ -166,11 +170,18 @@ static void send_byte(u8 byte) {
     gpiod_set_value(clock_gpio, 0);
     mdelay(2);
     
-    send_3bit_data(byte & 0x07);
-    send_3bit_data((byte >> 3) & 0x07);
-    send_3bit_data((byte >> 6) & 0x03);
+    send_3bit_data(byte & 0x07);        // bits 0-2
+    send_3bit_data((byte >> 3) & 0x07); // bits 3-5  
+    send_3bit_data((byte >> 6) & 0x03); // bits 6-7
     
+    gpiod_set_value(clock_gpio, 0);
+    mdelay(1);
+    gpiod_set_value(clock_gpio, 1);
+    mdelay(1);
+    gpiod_set_value(clock_gpio, 0);
     mdelay(2);
+    
+    pr_debug("[epaper_tx] Byte boundary marker sent\n");
 }
 
 static int wait_for_ack(void) {
@@ -306,6 +317,8 @@ static int send_packet(struct tx_packet *packet) {
 static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     static unsigned long last_ack_time = 0;
     static int irq_count = 0;
+    static bool expecting_double_pulse = false;
+    static unsigned long first_pulse_time = 0;
     unsigned long current_time = jiffies;
     bool current_ack;
     unsigned long time_since_last = 0;
@@ -321,7 +334,8 @@ static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     pr_info("[epaper_tx] *** ACK IRQ #%d *** GPIO=%d, time_since_last=%lums\n", 
             irq_count, current_ack, time_since_last);
     
-    if (time_before(current_time, last_ack_time + msecs_to_jiffies(5))) {
+    // Basic debouncing (but allow NACK double pulse pattern)
+    if (time_before(current_time, last_ack_time + msecs_to_jiffies(2))) {
         pr_debug("[epaper_tx] IRQ debounced (too soon: %lums)\n", time_since_last);
         return IRQ_HANDLED;
     }
@@ -330,16 +344,56 @@ static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
             current_state.transmission_active, current_state.handshake_complete, 
             current_state.last_seq_sent);
     
-    atomic_set(&ack_status, 1);
+    // Check for NACK double pulse pattern
+    if (!expecting_double_pulse) {
+        // First pulse detected
+        expecting_double_pulse = true;
+        first_pulse_time = current_time;
+        
+        // Start timer to wait for second pulse (NACK) or timeout (ACK)
+        mod_timer(&ack_detection_timer, current_time + msecs_to_jiffies(20));
+        
+        pr_info("[epaper_tx] First pulse detected, waiting for potential second pulse\n");
+        last_ack_time = current_time;
+        return IRQ_HANDLED;
+    } else {
+        // Second pulse detected within time window - this is NACK
+        unsigned long pulse_gap = jiffies_to_msecs(current_time - first_pulse_time);
+        expecting_double_pulse = false;
+        del_timer(&ack_detection_timer);
+        
+        if (pulse_gap <= 15) {
+            pr_info("[epaper_tx] NACK detected (double pulse, gap=%lums)\n", pulse_gap);
+            atomic_set(&ack_status, 0); // NACK
+            tx_stats.nacks_received++;
+        } else {
+            pr_info("[epaper_tx] Late second pulse (%lums), treating as new ACK\n", pulse_gap);
+            atomic_set(&ack_status, 1); // ACK
+        }
+        
+        atomic_set(&ack_received, 1);
+        smp_wmb();
+        wake_up(&ack_waitqueue);
+        last_ack_time = current_time;
+        
+        pr_info("[epaper_tx] *** %s PROCESSED *** - wakeup sent to waiting thread\n", 
+                atomic_read(&ack_status) ? "ACK" : "NACK");
+        
+        return IRQ_HANDLED;
+    }
+}
+
+static void ack_detection_timeout(struct timer_list *t) {
+    pr_info("[epaper_tx] ACK detection timeout - treating as single pulse (ACK)\n");
+    
+    atomic_set(&ack_status, 1); // Single pulse = ACK
     atomic_set(&ack_received, 1);
     
     smp_wmb();
     wake_up(&ack_waitqueue);
-    last_ack_time = current_time;
     
-    pr_info("[epaper_tx] *** ACK PROCESSED *** - wakeup sent to waiting thread (GPIO=%d)\n", current_ack);
-    
-    return IRQ_HANDLED;
+    pr_info("[epaper_tx] *** ACK PROCESSED (timeout) *** - wakeup sent to waiting thread\n");
+}
 }
 
 static int perform_handshake(void) {
@@ -385,7 +439,7 @@ static int perform_handshake(void) {
             tx_stats.successful_handshakes++;
             pr_info("[epaper_tx] *** HANDSHAKE SUCCESS on attempt %d ***\n", retry + 1);
             pr_info("[epaper_tx] Giving RX time to reset bit alignment...\n");
-            mdelay(20);  // Give RX time to reset bit alignment after handshake
+            mdelay(20);
             pr_info("[epaper_tx] === HANDSHAKE SEQUENCE COMPLETE ===\n");
             return 0;
         }
@@ -636,6 +690,9 @@ static int epaper_tx_probe(struct platform_device *pdev) {
         goto cleanup_gpio;
     }
     
+    /* Initialize the ACK detection timer */
+    timer_setup(&ack_detection_timer, ack_detection_timeout, 0);
+    
     ret = alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME);
     if (ret < 0) {
         pr_err("[epaper_tx] Failed to allocate device number\n");
@@ -682,6 +739,9 @@ cleanup_gpio:
 
 static void epaper_tx_remove(struct platform_device *pdev) {
     int i;
+    
+    /* Delete the timer */
+    del_timer_sync(&ack_detection_timer);
     
     device_destroy(tx_class, dev_num);
     class_destroy(tx_class);
