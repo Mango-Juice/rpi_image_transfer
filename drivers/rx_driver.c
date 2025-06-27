@@ -303,7 +303,7 @@ static int epaper_rx_probe(struct platform_device *pdev) {
     ret = cdev_add(&rx_cdev, dev_num, 1);
     if (ret) goto err_chrdev;
     
-    rx_class = class_create(THIS_MODULE, CLASS_NAME);
+    rx_class = class_create(CLASS_NAME);
     if (IS_ERR(rx_class)) {
         ret = PTR_ERR(rx_class);
         goto err_cdev;
@@ -315,6 +315,7 @@ static int epaper_rx_probe(struct platform_device *pdev) {
         goto err_class;
     }
     
+    pr_info("E-paper RX driver loaded successfully\n");
     return 0;
     
 err_class:
@@ -329,7 +330,7 @@ err_irq:
     return ret;
 }
 
-static int epaper_rx_remove(struct platform_device *pdev) {
+static void epaper_rx_remove(struct platform_device *pdev) {
     reset_rx_state();
     if (image_buffer) {
         kfree(image_buffer);
@@ -340,7 +341,7 @@ static int epaper_rx_remove(struct platform_device *pdev) {
     unregister_chrdev_region(dev_num, 1);
     free_irq(start_stop_irq, NULL);
     free_irq(clock_irq, NULL);
-    return 0;
+    pr_info("E-paper RX driver unloaded\n");
 }
 
 static struct platform_driver epaper_rx_driver = {

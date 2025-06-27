@@ -4,35 +4,41 @@ GPIO를 통한 이미지 전송을 위한 리눅스 커널 드라이버입니다
 
 ## 🔧 드라이버 구성
 
-- **tx_driver.c**: 송신 드라이버 (TX)
-- **rx_driver.c**: 수신 드라이버 (RX)
+- **tx_driver.c**: 송신 드라이버 (TX) - 5-pin 시리얼 프로토콜
+- **rx_driver.c**: 수신 드라이버 (RX) - 5-pin 시리얼 프로토콜
 
-## 📡 프로토콜 사양
+## 📡 프로토콜 사양 (5-pin 시리얼)
 
 ### GPIO 핀 구성
 
-| 신호    | 송신측 | 수신측 | 설명          |
-| ------- | ------ | ------ | ------------- |
-| DATA[0] | OUT    | IN     | 데이터 비트 0 |
-| DATA[1] | OUT    | IN     | 데이터 비트 1 |
-| DATA[2] | OUT    | IN     | 데이터 비트 2 |
-| CLOCK   | OUT    | IN     | 동기화 클럭   |
-| ACK     | IN     | OUT    | 응답 신호     |
+| 신호       | 송신측 | 수신측 | 설명                  |
+| ---------- | ------ | ------ | --------------------- |
+| CLOCK      | OUT    | IN     | 시리얼 클럭 (동기화)  |
+| DATA       | OUT    | IN     | 시리얼 데이터 (1-bit) |
+| START/STOP | OUT    | IN     | 전송 시작/종료 신호   |
+| ACK        | IN     | OUT    | 수신 확인 응답        |
+| NACK       | IN     | OUT    | 수신 오류 응답        |
 
 ### 통신 프로토콜
 
-1. **3-way 핸드셰이크**: 연결 설정
-2. **패킷 기반 전송**: 헤더 + 데이터 + CRC32
-3. **ACK/NACK 응답**: 패킷별 확인
-4. **자동 재전송**: 오류 시 최대 5회 재시도
+1. **시리얼 전송**: 1-bit 직렬 데이터 전송
+2. **블록 단위**: 헤더 + 데이터 + CRC32 블록 전송
+3. **ACK/NACK 응답**: 블록별 확인
+4. **자동 재전송**: 오류 시 최대 3회 재시도
 
-### 패킷 구조
+### 데이터 구조
 
 ```
-┌─────────┬──────────┬─────────┬─────────┐
-│ SEQ_NUM │ DATA_LEN │  DATA   │  CRC32  │
-│ (1byte) │ (1byte)  │(0-31)   │(4bytes) │
-└─────────┴──────────┴─────────┴─────────┘
+┌──────────┬───────────┬─────────────┬──────────┐
+│  HEADER  │   DATA    │   CRC32     │          │
+│ (10bytes)│ (variable)│  (4bytes)   │          │
+└──────────┴───────────┴─────────────┴──────────┘
+
+Header 구조:
+┌───────┬────────┬─────────────┬─────────────────┐
+│ WIDTH │ HEIGHT │ DATA_LENGTH │ HEADER_CHECKSUM │
+│(2byte)│(2byte) │  (4bytes)   │    (2bytes)     │
+└───────┴────────┴─────────────┴─────────────────┘
 ```
 
 ## 🚀 설치 및 사용
@@ -75,13 +81,13 @@ sudo chmod 666 /dev/epaper_rx
 
 ```dts
 &gpio {
-    epaper_tx: epaper-tx {
+    epaper_tx: epaper_tx_device {
         compatible = "epaper,gpio-tx";
-        data-gpios = <&gpio 2 GPIO_ACTIVE_HIGH>,    // DATA[0]
-                     <&gpio 3 GPIO_ACTIVE_HIGH>,    // DATA[1]
-                     <&gpio 4 GPIO_ACTIVE_HIGH>;    // DATA[2]
-        clock-gpios = <&gpio 5 GPIO_ACTIVE_HIGH>;   // CLOCK
-        ack-gpios = <&gpio 6 GPIO_ACTIVE_LOW>;      // ACK (input)
+        clock-gpios = <&gpio 13 0>;        // Clock output
+        data-gpios = <&gpio 5 0>;          // Data output
+        start-stop-gpios = <&gpio 6 0>;    // Start/Stop output
+        ack-gpios = <&gpio 16 0>;          // ACK input
+        nack-gpios = <&gpio 12 0>;         // NACK input
         status = "okay";
     };
 };
@@ -91,13 +97,13 @@ sudo chmod 666 /dev/epaper_rx
 
 ```dts
 &gpio {
-    epaper_rx: epaper-rx {
-        compatible = "epaper,gpio-driver";
-        rx-data-gpios = <&gpio 7 GPIO_ACTIVE_HIGH>,    // DATA[0]
-                        <&gpio 8 GPIO_ACTIVE_HIGH>,    // DATA[1]
-                        <&gpio 9 GPIO_ACTIVE_HIGH>;    // DATA[2]
-        rx-clock-gpios = <&gpio 10 GPIO_ACTIVE_HIGH>;  // CLOCK
-        rx-ack-gpios = <&gpio 11 GPIO_ACTIVE_HIGH>;    // ACK (output)
+    epaper_rx: epaper_rx_device {
+        compatible = "epaper,gpio-rx";
+        clock-gpios = <&gpio 21 0>;        // Clock input
+        data-gpios = <&gpio 19 0>;         // Data input
+        start-stop-gpios = <&gpio 26 0>;   // Start/Stop input
+        ack-gpios = <&gpio 25 0>;          // ACK output
+        nack-gpios = <&gpio 20 0>;         // NACK output
         status = "okay";
     };
 };
@@ -133,27 +139,27 @@ dmesg | grep epaper | tail -20
 ### 로그 메시지 예시
 
 ```
-[epaper_tx] TX driver initialized successfully
-[epaper_tx] Handshake successful
-[epaper_tx] Packet 0 sent successfully after 1 attempts
-[epaper_rx] RX driver initialized successfully
-[epaper_rx] Handshake SYN received, sending ACK
-[epaper_rx] Packet 0 received successfully (31 bytes, CRC32 OK)
+[epaper_tx] Driver loaded successfully
+[epaper_tx] Image sent successfully
+[epaper_tx] NACK received, retrying
+[epaper_rx] Driver loaded successfully
+[epaper_rx] Image received successfully (1920x1080, 2073600 bytes)
+[epaper_rx] CRC32 validation passed
 ```
 
 ## ⚡ 성능 특성
 
 ### 전송 속도
 
-- **클럭 속도**: GPIO 설정에 따라 결정
-- **패킷 크기**: 최대 31바이트 데이터
-- **오버헤드**: 헤더(2) + CRC32(4) = 6바이트
+- **시리얼 클럭**: 약 100kHz (udelay 타이밍)
+- **이미지 크기**: 최대 1920x1080 픽셀
+- **오버헤드**: 헤더(10) + CRC32(4) = 14바이트
 
 ### 신뢰성
 
 - **CRC32 검증**: 100% 데이터 무결성
-- **재전송 메커니즘**: 오류 시 자동 복구
-- **타임아웃 처리**: 데드락 방지
+- **재전송 메커니즘**: 오류 시 자동 복구 (최대 3회)
+- **타임아웃 처리**: 2초 타임아웃으로 데드락 방지
 
 ## 🐛 문제 해결
 
@@ -223,10 +229,11 @@ cat /proc/interrupts | grep epaper
 
 ## 📊 제한사항
 
-- **최대 패킷 크기**: 31바이트
-- **GPIO 핀 수**: 5개 (데이터 3 + 클럭 1 + ACK 1)
+- **최대 이미지 크기**: 1920x1080 픽셀
+- **GPIO 핀 수**: 5개 (Clock + Data + Start/Stop + ACK + NACK)
 - **동시 사용**: 각 디바이스당 하나의 프로세스만
 - **플랫폼**: 라즈베리파이 및 호환 SBC
+- **데이터 형식**: 바이너리 이미지 데이터 (width + height + data)
 
 ## 🗂️ 모듈 제거
 

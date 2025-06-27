@@ -70,40 +70,43 @@ ls -l /dev/epaper_*
 
 ```dts
 &gpio {
-    epaper_tx: epaper-tx {
+    epaper_tx: epaper_tx_device {
         compatible = "epaper,gpio-tx";
-        data-gpios = <&gpio 2 GPIO_ACTIVE_HIGH>,
-                     <&gpio 3 GPIO_ACTIVE_HIGH>,
-                     <&gpio 4 GPIO_ACTIVE_HIGH>;
-        clock-gpios = <&gpio 5 GPIO_ACTIVE_HIGH>;
-        ack-gpios = <&gpio 6 GPIO_ACTIVE_LOW>;
+        clock-gpios = <&gpio 13 0>;        // Clock output
+        data-gpios = <&gpio 5 0>;          // Data output
+        start-stop-gpios = <&gpio 6 0>;    // Start/Stop output
+        ack-gpios = <&gpio 16 0>;          // ACK input
+        nack-gpios = <&gpio 12 0>;         // NACK input
+        status = "okay";
     };
 
-    epaper_rx: epaper-rx {
-        compatible = "epaper,gpio-driver";
-        rx-data-gpios = <&gpio 7 GPIO_ACTIVE_HIGH>,
-                        <&gpio 8 GPIO_ACTIVE_HIGH>,
-                        <&gpio 9 GPIO_ACTIVE_HIGH>;
-        rx-clock-gpios = <&gpio 10 GPIO_ACTIVE_HIGH>;
-        rx-ack-gpios = <&gpio 11 GPIO_ACTIVE_HIGH>;
+    epaper_rx: epaper_rx_device {
+        compatible = "epaper,gpio-rx";
+        clock-gpios = <&gpio 21 0>;        // Clock input
+        data-gpios = <&gpio 19 0>;         // Data input
+        start-stop-gpios = <&gpio 26 0>;   // Start/Stop input
+        ack-gpios = <&gpio 25 0>;          // ACK output
+        nack-gpios = <&gpio 20 0>;         // NACK output
+        status = "okay";
     };
 };
 ```
 
-## 📡 통신 프로토콜
+## 📡 통신 프로토콜 (5-pin 시리얼)
 
 ### 물리적 연결
 
-- **데이터 라인**: 3개 (3-bit 병렬)
-- **클럭 라인**: 1개 (동기화)
-- **ACK/NACK 라인**: 1개 (응답)
+- **클럭 라인**: 1개 (시리얼 동기화)
+- **데이터 라인**: 1개 (시리얼 데이터)
+- **제어 라인**: 1개 (Start/Stop 신호)
+- **응답 라인**: 2개 (ACK/NACK)
 
 ### 프로토콜 특징
 
-- **3-way 핸드셰이크**: 연결 설정
+- **시리얼 전송**: 1-bit 직렬 데이터
 - **CRC32 검증**: 데이터 무결성
-- **패킷 시퀀싱**: 순서 보장
-- **자동 재전송**: 오류 복구
+- **블록 기반**: 헤더 + 데이터 + 체크섬
+- **자동 재전송**: 오류 복구 (최대 3회)
 
 ## 📚 API 사용법
 
@@ -247,15 +250,16 @@ sudo insmod rx_driver.ko
 
 ### 전송 속도
 
-- **프로토콜**: 3-bit 병렬, 패킷 기반
-- **처리량**: GPIO 속도에 따라 결정
+- **프로토콜**: 1-bit 시리얼, 블록 기반
+- **클럭 속도**: 약 100kHz (udelay 타이밍)
 - **신뢰성**: CRC32 + 재전송으로 100% 무결성 보장
 
 ### 제한사항
 
-- **최대 이미지 크기**: 10000x10000 픽셀
+- **최대 이미지 크기**: 1920x1080 픽셀
 - **메모리 사용량**: 이미지 크기에 비례
-- **실시간성**: 핸드셰이크 및 재전송으로 인한 지연
+- **실시간성**: 시리얼 전송 및 재전송으로 인한 지연
+- **GPIO 핀**: 5개 핀 필요 (Clock, Data, Start/Stop, ACK, NACK)
 
 ## 🐛 문제 해결
 

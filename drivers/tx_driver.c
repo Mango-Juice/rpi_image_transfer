@@ -240,7 +240,7 @@ static int epaper_tx_probe(struct platform_device *pdev) {
     ret = cdev_add(&tx_cdev, dev_num, 1);
     if (ret) goto err_chrdev;
     
-    tx_class = class_create(THIS_MODULE, CLASS_NAME);
+    tx_class = class_create(CLASS_NAME);
     if (IS_ERR(tx_class)) {
         ret = PTR_ERR(tx_class);
         goto err_cdev;
@@ -252,6 +252,7 @@ static int epaper_tx_probe(struct platform_device *pdev) {
         goto err_class;
     }
     
+    pr_info("E-paper TX driver loaded successfully\n");
     return 0;
     
 err_class:
@@ -266,14 +267,14 @@ err_irq:
     return ret;
 }
 
-static int epaper_tx_remove(struct platform_device *pdev) {
+static void epaper_tx_remove(struct platform_device *pdev) {
     device_destroy(tx_class, dev_num);
     class_destroy(tx_class);
     cdev_del(&tx_cdev);
     unregister_chrdev_region(dev_num, 1);
     free_irq(nack_irq, NULL);
     free_irq(ack_irq, NULL);
-    return 0;
+    pr_info("E-paper TX driver unloaded\n");
 }
 
 static struct platform_driver epaper_tx_driver = {
