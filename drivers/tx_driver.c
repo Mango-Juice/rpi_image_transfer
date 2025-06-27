@@ -252,6 +252,13 @@ static int send_packet(struct tx_packet *packet) {
         send_byte((packet->crc32 >> 16) & 0xFF);
         send_byte((packet->crc32 >> 24) & 0xFF);
         
+        pr_debug("[epaper_tx] CRC32 bytes sent: 0x%02x 0x%02x 0x%02x 0x%02x (CRC32=0x%08x)\n",
+                (packet->crc32) & 0xFF,
+                (packet->crc32 >> 8) & 0xFF,
+                (packet->crc32 >> 16) & 0xFF,
+                (packet->crc32 >> 24) & 0xFF,
+                packet->crc32);
+        
         ret = wait_for_ack();
         if (ret == 0) {
             tx_stats.total_packets_sent++;
@@ -377,6 +384,8 @@ static int perform_handshake(void) {
             current_state.handshake_complete = true;
             tx_stats.successful_handshakes++;
             pr_info("[epaper_tx] *** HANDSHAKE SUCCESS on attempt %d ***\n", retry + 1);
+            pr_info("[epaper_tx] Giving RX time to reset bit alignment...\n");
+            mdelay(20);  // Give RX time to reset bit alignment after handshake
             pr_info("[epaper_tx] === HANDSHAKE SEQUENCE COMPLETE ===\n");
             return 0;
         }

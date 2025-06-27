@@ -28,7 +28,6 @@
 
 enum rx_state {
     RX_IDLE,
-    RX_SEQ_NUM,
     RX_DATA_LEN,
     RX_DATA,
     RX_CRC32,
@@ -246,23 +245,35 @@ static void process_3bit_data(u8 data) {
                 pr_info("[epaper_rx] *** HANDSHAKE SYN DETECTED: 0x%02x ***\n", byte);
                 pr_info("[epaper_rx] Handshake SYN received, sending ACK\n");
                 send_handshake_ack();
-                reset_rx_state();
-                pr_info("[epaper_rx] Handshake complete, ready for data packets\n");
+                // Complete bit alignment reset for clean data reception
+                rx_state.bit_position = 0;
+                rx_state.current_byte = 0;
+                rx_state.bytes_received_in_packet = 0;
+                rx_state.crc_byte_count = 0;
+                data_index = 0;
+                memset(&current_packet, 0, sizeof(current_packet));
+                pr_info("[epaper_rx] Handshake complete, bit alignment fully reset for data packets\n");
             } else {
-                pr_info("[epaper_rx] Non-SYN byte in IDLE: 0x%02x (expected SYN: 0x%02x)\n", byte, HANDSHAKE_SYN);
+                pr_info("[epaper_rx] Data packet seq_num in IDLE: %d\n", byte);
                 if (byte > 250) {
                     pr_debug("[epaper_rx] Suspicious seq_num %d, ignoring\n", byte);
                     return;
                 }
-                rx_state.current_state = RX_SEQ_NUM;
+                // Reset bit alignment when starting new packet
+                rx_state.bit_position = 0;
+                rx_state.current_byte = 0;
+                rx_state.bytes_received_in_packet = 0;
+                rx_state.crc_byte_count = 0;
+                data_index = 0;
+                
+                rx_state.current_state = RX_DATA_LEN;
                 current_packet.seq_num = byte;
                 update_state_timer();
-                pr_debug("[epaper_rx] Received seq_num: %d\n", byte);
+                pr_info("[epaper_rx] Received seq_num: %d, bit alignment reset, transitioning to DATA_LEN\n", byte);
             }
             break;
             
-        case RX_SEQ_NUM:
-            rx_state.current_state = RX_DATA_LEN;
+        case RX_DATA_LEN:
             current_packet.data_len = byte;
             update_state_timer();
             if (current_packet.data_len > MAX_PACKET_DATA) {
@@ -271,23 +282,14 @@ static void process_3bit_data(u8 data) {
                 send_ack(false);
                 return;
             }
-            pr_debug("[epaper_rx] Received data_len: %d\n", byte);
+            pr_info("[epaper_rx] Received data_len: %d\n", byte);
             data_index = 0;
-            break;
             
-        case RX_DATA_LEN:
             if (current_packet.data_len == 0) {
                 rx_state.current_state = RX_CRC32;
                 rx_state.crc_byte_count = 0;
-                current_packet.crc32 = byte;
             } else {
                 rx_state.current_state = RX_DATA;
-                if (data_index >= MAX_PACKET_DATA) {
-                    force_state_reset("Data index overflow at first data byte");
-                    return;
-                }
-                current_packet.data[data_index++] = byte;
-                pr_debug("[epaper_rx] Received data[%d]: 0x%02x\n", data_index-1, byte);
             }
             break;
             
@@ -301,7 +303,7 @@ static void process_3bit_data(u8 data) {
                 return;
             }
             current_packet.data[data_index++] = byte;
-            pr_debug("[epaper_rx] Received data[%d]: 0x%02x\n", data_index-1, byte);
+            pr_info("[epaper_rx] Received data[%d]: 0x%02x\n", data_index-1, byte);
             if (data_index >= current_packet.data_len) {
                 rx_state.current_state = RX_CRC32;
                 rx_state.crc_byte_count = 0;
@@ -317,15 +319,19 @@ static void process_3bit_data(u8 data) {
             switch (rx_state.crc_byte_count) {
             case 0:
                 current_packet.crc32 = byte;
+                pr_debug("[epaper_rx] CRC32 byte[0]: 0x%02x\n", byte);
                 break;
             case 1:
                 current_packet.crc32 |= (u32)byte << 8;
+                pr_debug("[epaper_rx] CRC32 byte[1]: 0x%02x\n", byte);
                 break;
             case 2:
                 current_packet.crc32 |= (u32)byte << 16;
+                pr_debug("[epaper_rx] CRC32 byte[2]: 0x%02x\n", byte);
                 break;
             case 3:
                 current_packet.crc32 |= (u32)byte << 24;
+                pr_debug("[epaper_rx] CRC32 byte[3]: 0x%02x\n", byte);
                 pr_debug("[epaper_rx] Received complete CRC32: 0x%08x\n", current_packet.crc32);
                 
                 if (verify_crc32(&current_packet)) {
