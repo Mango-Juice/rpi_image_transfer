@@ -12,18 +12,9 @@
 #include <linux/interrupt.h>
 #include <linux/crc32.h>
 #include <linux/platform_device.h>
-#include <linu        ack_gpio_state = gpiod_get_value(ack_gpio);
-        
-        if (last_error == -ETIMEDOUT) {
-            pr_warn("[epaper_tx] Handshake timeout on attempt %d (ACK GPIO: %d)\n", 
-                    retry + 1, ack_gpio_state);
-        } else if (last_error == -ECOMM) {
-            pr_warn("[epaper_tx] Handshake NACK on attempt %d (ACK GPIO: %d)\n", 
-                    retry + 1, ack_gpio_state);
-        } else {
-            pr_warn("[epaper_tx] Handshake error %d on attempt %d (ACK GPIO: %d)\n", 
-                    last_error, retry + 1, ack_gpio_state);
-        }ine EPAPER_TX_MAGIC 'E'
+#include <linux/of.h>
+
+#define EPAPER_TX_MAGIC 'E'
 #define EPAPER_TX_GET_STATUS    _IOR(EPAPER_TX_MAGIC, 1, struct tx_status_info)
 #define EPAPER_TX_GET_STATS     _IOR(EPAPER_TX_MAGIC, 2, struct tx_statistics)
 #define EPAPER_TX_RESET_STATS   _IO(EPAPER_TX_MAGIC, 3)
@@ -190,8 +181,8 @@ static int wait_for_ack(void) {
     int poll_count = 0;
     
     initial_ack_gpio = gpiod_get_value(ack_gpio);
-    pr_info("[epaper_tx] Waiting for ACK (seq: %d, timeout: %dms, initial ACK GPIO: %d)\n", 
-            current_state.last_seq_sent, TIMEOUT_MS, initial_ack_gpio);
+    pr_info("[epaper_tx] Waiting for ACK (handshake, timeout: %dms, initial ACK GPIO: %d)\n", 
+            TIMEOUT_MS, initial_ack_gpio);
     
     atomic_set(&ack_received, 0);
     atomic_set(&ack_status, 0);
