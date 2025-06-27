@@ -116,6 +116,7 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
 
 static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
     if (gpiod_get_value(start_stop_gpio)) {
+        pr_info("RX: Start signal received, beginning reception\n");
         reset_rx_state();
         receiving_data = true;
         byte_count = 0;
@@ -123,22 +124,34 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         timer_setup(&timeout_timer, timeout_handler, 0);
         mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
     } else {
+        pr_info("RX: Stop signal received, byte_count=%u\n", byte_count);
         del_timer(&timeout_timer);  // Use del_timer() instead of del_timer_sync() in interrupt context
         receiving_data = false;
         
         if (byte_count < sizeof(header)) {
+            pr_warn("RX: Incomplete header: %u < %zu bytes, sending NACK\n", 
+                   byte_count, sizeof(header));
             send_nack();
             return IRQ_HANDLED;
         }
         
         if (byte_count == sizeof(header)) {
+            pr_info("RX: Header received: width=%u, height=%u, data_length=%u, checksum=%u\n",
+                   header.width, header.height, header.data_length, header.header_checksum);
+            
             u16 calc_checksum = calculate_header_checksum(&header);
+            pr_info("RX: Calculated checksum: %u, received: %u\n", 
+                   calc_checksum, header.header_checksum);
+            
             if (header.header_checksum != calc_checksum) {
+                pr_warn("RX: Header checksum mismatch, sending NACK\n");
                 send_nack();
                 return IRQ_HANDLED;
             }
             
             if (header.data_length > MAX_IMAGE_SIZE) {
+                pr_warn("RX: Data length too large: %u > %u, sending NACK\n",
+                       header.data_length, MAX_IMAGE_SIZE);
                 send_nack();
                 return IRQ_HANDLED;
             }
@@ -148,10 +161,13 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             }
             image_buffer = kmalloc(header.data_length + sizeof(u32), GFP_ATOMIC);
             if (!image_buffer) {
+                pr_err("RX: Failed to allocate image buffer, sending NACK\n");
                 send_nack();
                 return IRQ_HANDLED;
             }
             
+            pr_info("RX: Header OK, sending ACK, waiting for %u bytes of data\n", 
+                   header.data_length);
             send_ack();
             
             receiving_data = true;
