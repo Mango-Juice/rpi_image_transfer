@@ -1,4 +1,12 @@
-#ifndef RECEIVE_EPAPER_DATA_H
+#ifndef // Image header structure matching kernel driver
+typedef struct
+{
+    uint16_t width;
+    uint16_t height;
+    uint32_t data_length;
+    uint16_t header_checksum;
+} __attribute__((packed)) image_header_t;
+_EPAPER_DATA_H
 #define RECEIVE_EPAPER_DATA_H
 
 #include <stdint.h>

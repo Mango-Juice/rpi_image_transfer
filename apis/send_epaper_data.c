@@ -258,10 +258,22 @@ bool epaper_send_image_advanced(int fd, const char *image_path, const epaper_con
     stbi_image_free(img);
     
     // Create image header for new protocol
+    if (final_width > 65535 || final_height > 65535) {
+        fprintf(stderr, "Error: Image dimensions too large for protocol (max 65535x65535)\n");
+        free(mono_buffer);
+        return false;
+    }
+    
+    if (mono_size > 0xFFFFFFFF) {
+        fprintf(stderr, "Error: Image data too large for protocol\n");
+        free(mono_buffer);
+        return false;
+    }
+    
     image_header_t header;
-    header.width = final_width;
-    header.height = final_height;
-    header.data_length = mono_size;
+    header.width = (uint16_t)final_width;
+    header.height = (uint16_t)final_height;
+    header.data_length = (uint32_t)mono_size;
     header.header_checksum = 0; // Will be calculated by kernel driver
     
     // Create buffer for header + image data
