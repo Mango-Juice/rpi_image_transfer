@@ -18,7 +18,7 @@
 #define CLASS_NAME "epaper_rx"
 #define DEVICE_NAME "epaper_rx"
 #define MAX_IMAGE_SIZE (1920 * 1080)
-#define TIMEOUT_MS 2000
+#define TIMEOUT_MS 5000
 
 struct image_header {
     u16 width;
@@ -81,6 +81,8 @@ static void send_nack(void) {
 }
 
 static void timeout_handler(struct timer_list *t) {
+    pr_warn("RX: Timeout in state %d, byte_count=%u, sending NACK\n", 
+           rx_state, byte_count);
     receiving_data = false;
     bit_count = 0;
     byte_count = 0;
@@ -180,6 +182,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                    header.data_length);
             send_ack();
             
+            pr_info("RX: Changing state from %d to %d\n", rx_state, RX_STATE_DATA);
             receiving_data = true;
             byte_count = 0;
             data_ptr = image_buffer;
@@ -198,6 +201,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                    header.data_length);
             send_ack();
             
+            pr_info("RX: Changing state from %d to %d\n", rx_state, RX_STATE_CRC32);
             receiving_data = true;
             byte_count = 0;
             data_ptr = image_buffer + header.data_length;
