@@ -372,6 +372,6 @@ static struct platform_driver epaper_tx_driver = {
 module_platform_driver(epaper_tx_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("E-paper Team");
+MODULE_AUTHOR("Jeon Mingyu");
 MODULE_DESCRIPTION("E-paper GPIO TX Driver - 5-pin Serial Protocol");
 MODULE_VERSION("2.0");

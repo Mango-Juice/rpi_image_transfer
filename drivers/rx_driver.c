@@ -59,15 +59,6 @@ static volatile u32 byte_count;
 static volatile u8 *data_ptr;
 static volatile u32 expected_crc, received_crc;
 
-// Reception states
-typedef enum {
-    RX_STATE_HEADER,
-    RX_STATE_DATA,
-    RX_STATE_CRC32
-} rx_state_t;
-
-static volatile rx_state_t rx_state;
-
 static void send_ack(void) {
     gpiod_set_value(ack_gpio, 1);
     mdelay(10);
@@ -81,8 +72,8 @@ static void send_nack(void) {
 }
 
 static void timeout_handler(struct timer_list *t) {
-    pr_warn("RX: Timeout in state %d, byte_count=%u, sending NACK\n", 
-           rx_state, byte_count);
+    pr_warn("RX: Timeout, byte_count=%u, data_ptr=%p, sending NACK\n", 
+           byte_count, data_ptr);
     receiving_data = false;
     bit_count = 0;
     byte_count = 0;
@@ -91,13 +82,12 @@ static void timeout_handler(struct timer_list *t) {
 }
 
 static void reset_rx_state(void) {
-    del_timer(&timeout_timer);  // Use del_timer() since this can be called from interrupt context
+    del_timer(&timeout_timer);
     receiving_data = false;
     bit_count = 0;
     byte_count = 0;
     current_byte = 0;
     data_ptr = NULL;
-    rx_state = RX_STATE_HEADER;
 }
 
 static u16 calculate_header_checksum(struct image_header *h) {
@@ -136,11 +126,11 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         timer_setup(&timeout_timer, timeout_handler, 0);
         mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
     } else {
-        pr_info("RX: Stop signal received, byte_count=%u, state=%d\n", byte_count, rx_state);
-        del_timer(&timeout_timer);  // Use del_timer() instead of del_timer_sync() in interrupt context
+        pr_info("RX: Stop signal received, byte_count=%u, data_ptr=%p\n", byte_count, data_ptr);
+        del_timer(&timeout_timer);
         receiving_data = false;
         
-        if (rx_state == RX_STATE_HEADER) {
+        if (data_ptr == (u8*)&header || data_ptr < (u8*)&header + sizeof(header)) {
             if (byte_count < sizeof(header)) {
                 pr_warn("RX: Incomplete header: %u < %zu bytes, sending NACK\n", 
                        byte_count, sizeof(header));
@@ -182,14 +172,12 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                    header.data_length);
             send_ack();
             
-            pr_info("RX: Changing state from %d to %d\n", rx_state, RX_STATE_DATA);
             receiving_data = true;
             byte_count = 0;
             data_ptr = image_buffer;
-            rx_state = RX_STATE_DATA;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
             
-        } else if (rx_state == RX_STATE_DATA) {
+        } else if (data_ptr >= image_buffer && data_ptr <= image_buffer + header.data_length) {
             if (byte_count != header.data_length) {
                 pr_warn("RX: Incomplete data: %u != %u bytes, sending NACK\n", 
                        byte_count, header.data_length);
@@ -201,14 +189,12 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                    header.data_length);
             send_ack();
             
-            pr_info("RX: Changing state from %d to %d\n", rx_state, RX_STATE_CRC32);
             receiving_data = true;
             byte_count = 0;
             data_ptr = image_buffer + header.data_length;
-            rx_state = RX_STATE_CRC32;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
             
-        } else if (rx_state == RX_STATE_CRC32) {
+        } else if (data_ptr >= image_buffer + header.data_length) {
             if (byte_count != sizeof(u32)) {
                 pr_warn("RX: Incomplete CRC32: %u != %zu bytes, sending NACK\n", 
                        byte_count, sizeof(u32));
@@ -232,7 +218,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                 send_nack();
             }
         } else {
-            pr_warn("RX: Unknown state: %d, sending NACK\n", rx_state);
+            pr_warn("RX: Unknown data_ptr state: %p, sending NACK\n", data_ptr);
             send_nack();
         }
     }
@@ -409,7 +395,7 @@ err_irq:
 }
 
 static void epaper_rx_remove(struct platform_device *pdev) {
-    del_timer_sync(&timeout_timer);  // Safe to use del_timer_sync() in non-interrupt context
+    del_timer_sync(&timeout_timer);
     receiving_data = false;
     if (image_buffer) {
         kfree(image_buffer);
