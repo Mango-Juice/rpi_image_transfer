@@ -140,9 +140,12 @@ static void send_3bit_data(u8 data) {
     wmb();
     udelay(5);
     
-    gpiod_set_value(clock_gpio, 1);
+    // 확실한 상승 엣지 생성을 위해 LOW부터 시작
+    gpiod_set_value(clock_gpio, 0);  // 먼저 LOW 확보
+    udelay(3);                       // 짧은 대기
+    gpiod_set_value(clock_gpio, 1);  // 상승 엣지 생성
     udelay(5);
-    gpiod_set_value(clock_gpio, 0);
+    gpiod_set_value(clock_gpio, 0);  // 하강 엣지
     udelay(5);
     
     local_irq_restore(flags);

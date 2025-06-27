@@ -380,6 +380,7 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
     }
     
     data = read_3bit_data();
+    pr_info("[epaper_rx] Clock IRQ: data=0x%02x, state=%d\n", data, rx_state.current_state);
     
     if (!spin_trylock_irqsave(&rx_state_lock, flags)) {
         pr_debug("[epaper_rx] State lock busy, dropping clock\n");
