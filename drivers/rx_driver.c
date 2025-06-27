@@ -115,7 +115,7 @@ static void reset_rx_state(void) {
     
     del_timer(&state_timeout_timer);
     
-    pr_debug("[epaper_rx] RX state reset\n");
+    pr_info("[epaper_rx] RX state reset - bit alignment cleared\n");
 }
 
 static void force_state_reset(const char *reason) {
@@ -219,6 +219,10 @@ static void process_3bit_data(u8 data) {
         
         switch (rx_state.current_state) {
         case RX_IDLE:
+            // IDLE 상태에서는 항상 비트 정렬을 리셋
+            rx_state.bit_position = 0;
+            rx_state.current_byte = 0;
+            
             if (byte == HANDSHAKE_SYN) {
                 pr_info("[epaper_rx] *** HANDSHAKE SYN DETECTED: 0x%02x ***\n", byte);
                 pr_info("[epaper_rx] Handshake SYN received, sending ACK\n");

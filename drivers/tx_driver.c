@@ -150,9 +150,15 @@ static void send_3bit_data(u8 data) {
 
 static void send_byte(u8 byte) {
     pr_info("[epaper_tx] Sending byte: 0x%02x\n", byte);
+    
+    gpiod_set_value(clock_gpio, 0);
+    mdelay(2);
+    
     send_3bit_data(byte & 0x07);
     send_3bit_data((byte >> 3) & 0x07);
     send_3bit_data((byte >> 6) & 0x03);
+    
+    mdelay(2);
 }
 
 static int wait_for_ack(void) {
@@ -255,14 +261,12 @@ static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     unsigned long current_time = jiffies;
     bool current_ack;
     
-    // 더 긴 디바운싱 시간으로 노이즈 방지
     if (time_before(current_time, last_ack_time + msecs_to_jiffies(10))) {
         return IRQ_HANDLED;
     }
     
     current_ack = gpiod_get_value(ack_gpio);
     
-    // ACK가 LOW일 때만 처리 (노이즈 방지)
     if (!current_ack) {
         return IRQ_HANDLED;
     }
