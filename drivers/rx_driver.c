@@ -20,6 +20,13 @@
 #define MAX_IMAGE_SIZE (1920 * 1080)
 #define TIMEOUT_MS 5000
 
+enum rx_state {
+    RX_STATE_HEADER = 0,
+    RX_STATE_DATA = 1,
+    RX_STATE_CRC32 = 2,
+    RX_STATE_COMPLETE = 3
+};
+
 struct image_header {
     u16 width;
     u16 height;
@@ -58,6 +65,7 @@ static volatile bool receiving_data;
 static volatile u32 byte_count;
 static volatile u8 *data_ptr;
 static volatile u32 expected_crc, received_crc;
+static volatile enum rx_state current_rx_state;
 
 static void send_ack(void) {
     gpiod_set_value(ack_gpio, 1);
@@ -88,6 +96,7 @@ static void reset_rx_state(void) {
     byte_count = 0;
     current_byte = 0;
     data_ptr = NULL;
+    current_rx_state = RX_STATE_HEADER;
 }
 
 static u16 calculate_header_checksum(struct image_header *h) {
@@ -118,21 +127,36 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
 
 static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
     if (gpiod_get_value(start_stop_gpio)) {
-        pr_info("RX: Start signal received, beginning reception\n");
-        reset_rx_state();
+        pr_info("RX: Start signal received, beginning reception, rx_state=%d\n", current_rx_state);
+        
         receiving_data = true;
         byte_count = 0;
-        data_ptr = (u8*)&header;
+        bit_count = 0;
+        current_byte = 0;
+        
+        // Set data_ptr based on current state
+        if (current_rx_state == RX_STATE_HEADER) {
+            data_ptr = (u8*)&header;
+        } else if (current_rx_state == RX_STATE_DATA) {
+            data_ptr = image_buffer;
+        } else if (current_rx_state == RX_STATE_CRC32) {
+            data_ptr = image_buffer + header.data_length;
+        }
+        
+        pr_info("RX: Set data_ptr=%p for state %d\n", data_ptr, current_rx_state);
+        
         timer_setup(&timeout_timer, timeout_handler, 0);
         mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
     } else {
-        pr_info("RX: Stop signal received, byte_count=%u, data_ptr=%p\n", byte_count, data_ptr);
-        pr_info("RX: Debug - image_buffer=%p, header.data_length=%u, image_buffer+data_length=%p\n", 
-               image_buffer, header.data_length, image_buffer + header.data_length);
+        pr_info("RX: Stop signal received, byte_count=%u, data_ptr=%p, rx_state=%d\n", 
+               byte_count, data_ptr, current_rx_state);
+        pr_info("RX: Debug - image_buffer=%p, header.data_length=%u\n", 
+               image_buffer, header.data_length);
         del_timer(&timeout_timer);
         receiving_data = false;
         
-        if (data_ptr >= (u8*)&header && data_ptr <= (u8*)&header + sizeof(header)) {
+        if (current_rx_state == RX_STATE_HEADER) {
+            // Receiving header
             if (byte_count < sizeof(header)) {
                 pr_warn("RX: Incomplete header: %u < %zu bytes, sending NACK\n", 
                        byte_count, sizeof(header));
@@ -174,26 +198,31 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                    header.data_length);
             send_ack();
             
-            receiving_data = true;
-            byte_count = 0;
-            data_ptr = image_buffer;
-            mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
+            current_rx_state = RX_STATE_DATA;
             
-        } else if (data_ptr >= image_buffer && data_ptr <= image_buffer + header.data_length + sizeof(u32) && byte_count == header.data_length) {
+        } else if (current_rx_state == RX_STATE_DATA) {
+            // Receiving data
+            if (byte_count != header.data_length) {
+                pr_warn("RX: Incomplete data: %u != %u bytes, sending NACK\n", 
+                       byte_count, header.data_length);
+                send_nack();
+                current_rx_state = RX_STATE_HEADER;
+                return IRQ_HANDLED;
+            }
+            
             pr_info("RX: Data received (%u bytes), sending ACK, waiting for CRC32\n", 
                    header.data_length);
             send_ack();
             
-            receiving_data = true;
-            byte_count = 0;
-            data_ptr = image_buffer + header.data_length;
-            mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
+            current_rx_state = RX_STATE_CRC32;
             
-        } else if (data_ptr >= image_buffer + header.data_length && byte_count == sizeof(u32)) {
+        } else if (current_rx_state == RX_STATE_CRC32) {
+            // Receiving CRC32
             if (byte_count != sizeof(u32)) {
                 pr_warn("RX: Incomplete CRC32: %u != %zu bytes, sending NACK\n", 
                        byte_count, sizeof(u32));
                 send_nack();
+                current_rx_state = RX_STATE_HEADER;
                 return IRQ_HANDLED;
             }
             
@@ -212,11 +241,12 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                 pr_warn("RX: CRC32 mismatch, sending NACK\n");
                 send_nack();
             }
+            current_rx_state = RX_STATE_HEADER; // Reset for next transmission
+            
         } else {
-            pr_warn("RX: Unknown data_ptr state: %p, byte_count=%u\n", data_ptr, byte_count);
-            pr_warn("RX: image_buffer=%p, image_buffer+data_length=%p, image_buffer+data_length+4=%p\n",
-                   image_buffer, image_buffer + header.data_length, image_buffer + header.data_length + sizeof(u32));
+            pr_warn("RX: Unknown rx_state: %d, byte_count=%u\n", current_rx_state, byte_count);
             send_nack();
+            current_rx_state = RX_STATE_HEADER; // Reset for next transmission
         }
     }
     
