@@ -24,9 +24,9 @@
             epaper_rx: epaper_rx_device {
                 compatible = "epaper,gpio-driver";
                 /* RX 파이에서 사용할 GPIO 핀들 */
-                rx-data-gpios = <&gpio 17 0>, <&gpio 18 0>, <&gpio 19 0>; // DATA0, DATA1, DATA2 (입력)
-                rx-clock-gpios = <&gpio 20 0>; // CLOCK (입력)
-                rx-ack-gpios = <&gpio 21 0>;   // ACK (출력)
+                rx-data-gpios = <&gpio 22 0>, <&gpio 23 0>, <&gpio 24 0>; // DATA0, DATA1, DATA2 (입력)
+                rx-clock-gpios = <&gpio 25 0>; // CLOCK (입력)
+                rx-ack-gpios = <&gpio 26 0>;   // ACK (출력)
                 status = "okay";
             };
         };
