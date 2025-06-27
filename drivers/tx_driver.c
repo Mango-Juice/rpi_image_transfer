@@ -55,12 +55,14 @@ static volatile bool ack_received, nack_received;
 static int ack_irq, nack_irq;
 
 static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
+    pr_info("TX: ACK interrupt received\n");
     ack_received = true;
     wake_up_interruptible(&response_waitqueue);
     return IRQ_HANDLED;
 }
 
 static irqreturn_t nack_irq_handler(int irq, void *dev_id) {
+    pr_info("TX: NACK interrupt received\n");
     nack_received = true;
     wake_up_interruptible(&response_waitqueue);
     return IRQ_HANDLED;
@@ -92,22 +94,29 @@ static void send_stop_signal(void) {
 }
 
 static int wait_for_response(void) {
+    pr_debug("TX: Waiting for ACK/NACK response...\n");
     int ret = wait_event_timeout(response_waitqueue, 
                                 ack_received || nack_received,
                                 msecs_to_jiffies(TIMEOUT_MS));
     
-    if (ret == 0) return -ETIMEDOUT;
+    if (ret == 0) {
+        pr_warn("TX: Timeout waiting for response\n");
+        return -ETIMEDOUT;
+    }
     
     if (nack_received) {
+        pr_info("TX: NACK received\n");
         nack_received = false;
         return -ECOMM;
     }
     
     if (ack_received) {
+        pr_info("TX: ACK received\n");
         ack_received = false;
         return 0;
     }
     
+    pr_warn("TX: Unknown response state\n");
     return -EIO;
 }
 
