@@ -5,6 +5,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+// Image header structure matching kernel driver
+typedef struct
+{
+    uint32_t width;
+    uint32_t height;
+    uint32_t data_length;
+    uint32_t header_checksum;
+} __attribute__((packed)) image_header_t;
+
 typedef struct
 {
     uint32_t width;

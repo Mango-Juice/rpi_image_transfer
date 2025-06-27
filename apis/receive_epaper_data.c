@@ -92,26 +92,31 @@ bool epaper_receive_image_advanced(int fd, epaper_image_t *image, const epaper_r
     bool verbose = options ? options->verbose : false;
     
     if (verbose) {
-        printf("Waiting for image dimensions...\n");
+        printf("Waiting for image header...\n");
     }
     
-    uint32_t net_width, net_height;
-    if (!read_exact(fd, &net_width, sizeof(net_width), timeout) ||
-        !read_exact(fd, &net_height, sizeof(net_height), timeout)) {
-        fprintf(stderr, "Failed to read image dimensions\n");
+    // Read the complete data from the kernel driver
+    // The kernel driver provides header + image data + CRC32 verification
+    
+    // First, try to read a reasonable amount to get the header
+    image_header_t header;
+    if (!read_exact(fd, &header, sizeof(header), timeout)) {
+        fprintf(stderr, "Failed to read image header\n");
         return false;
     }
     
-    image->width = ntohl(net_width);
-    image->height = ntohl(net_height);
+    image->width = header.width;
+    image->height = header.height;
     
     if (image->width == 0 || image->height == 0 || 
-        image->width > 10000 || image->height > 10000) {
-        fprintf(stderr, "Invalid image dimensions: %ux%u\n", image->width, image->height);
+        image->width > 10000 || image->height > 10000 ||
+        header.data_length == 0 || header.data_length > 10000000) {
+        fprintf(stderr, "Invalid header: %ux%u, data_length=%u\n", 
+                image->width, image->height, header.data_length);
         return false;
     }
     
-    image->data_size = (image->width * image->height + 7) / 8;
+    image->data_size = header.data_length;
     image->data = malloc(image->data_size);
     if (!image->data) {
         fprintf(stderr, "Failed to allocate memory for image data\n");

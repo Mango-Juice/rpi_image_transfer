@@ -8,6 +8,11 @@
 #include <math.h>
 #include <errno.h>
 
+// Define ECOMM if not available
+#ifndef ECOMM
+#define ECOMM 70
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -252,73 +257,37 @@ bool epaper_send_image_advanced(int fd, const char *image_path, const epaper_con
     if (processed_img != img) free(processed_img);
     stbi_image_free(img);
     
-    uint32_t net_width = htonl(final_width);
-    uint32_t net_height = htonl(final_height);
+    // Create image header for new protocol
+    image_header_t header;
+    header.width = final_width;
+    header.height = final_height;
+    header.data_length = mono_size;
+    header.header_checksum = 0; // Will be calculated by kernel driver
     
-    printf("Sending dimensions: %dx%d\n", final_width, final_height);
-    ssize_t bytes_written = write(fd, &net_width, sizeof(net_width));
-    if (bytes_written != sizeof(net_width)) {
-        if (bytes_written < 0) {
-            switch (errno) {
-            case ETIMEDOUT:
-                fprintf(stderr, "Error: Connection timeout while sending width\n");
-                break;
-            case ECOMM:
-                fprintf(stderr, "Error: Communication error (NACK) while sending width\n");
-                break;
-            case EHOSTUNREACH:
-                fprintf(stderr, "Error: Receiver not reachable while sending width\n");
-                break;
-            case ECONNREFUSED:
-                fprintf(stderr, "Error: Connection refused by receiver while sending width\n");
-                break;
-            default:
-                perror("Failed to write width");
-                break;
-            }
-        } else {
-            fprintf(stderr, "Error: Partial write of width (%zd/%zu bytes)\n", 
-                   bytes_written, sizeof(net_width));
-        }
+    // Create buffer for header + image data
+    size_t total_size = sizeof(header) + mono_size;
+    unsigned char *send_buffer = malloc(total_size);
+    if (!send_buffer) {
+        fprintf(stderr, "Error: Failed to allocate send buffer\n");
         free(mono_buffer);
         return false;
     }
     
-    bytes_written = write(fd, &net_height, sizeof(net_height));
-    if (bytes_written != sizeof(net_height)) {
-        if (bytes_written < 0) {
-            switch (errno) {
-            case ETIMEDOUT:
-                fprintf(stderr, "Error: Connection timeout while sending height\n");
-                break;
-            case ECOMM:
-                fprintf(stderr, "Error: Communication error (NACK) while sending height\n");
-                break;
-            case EHOSTUNREACH:
-                fprintf(stderr, "Error: Receiver not reachable while sending height\n");
-                break;
-            case ECONNREFUSED:
-                fprintf(stderr, "Error: Connection refused by receiver while sending height\n");
-                break;
-            default:
-                perror("Failed to write height");
-                break;
-            }
-        } else {
-            fprintf(stderr, "Error: Partial write of height (%zd/%zu bytes)\n", 
-                   bytes_written, sizeof(net_height));
-        }
-        free(mono_buffer);
-        return false;
-    }
+    // Copy header and image data to send buffer
+    memcpy(send_buffer, &header, sizeof(header));
+    memcpy(send_buffer + sizeof(header), mono_buffer, mono_size);
     
-    printf("Sending image data...\n");
-    bool success = send_with_progress(fd, mono_buffer, mono_size);
+    printf("Sending image: %dx%d, %zu bytes data\n", final_width, final_height, mono_size);
+    printf("Total transmission: %zu bytes (header + data)\n", total_size);
+    
+    // Send everything at once - kernel driver will handle protocol details
+    bool success = send_with_progress(fd, send_buffer, total_size);
     
     if (success) {
-        printf("Successfully sent %zu bytes\n", mono_size);
+        printf("Successfully sent image\n");
     }
     
+    free(send_buffer);
     free(mono_buffer);
     return success;
 }
