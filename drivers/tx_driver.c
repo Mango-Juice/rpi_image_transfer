@@ -62,6 +62,11 @@ static irqreturn_t nack_irq_handler(int irq, void *dev_id) {
 }
 
 static void send_bit(int bit) {
+    if (IS_ERR_OR_NULL(data_gpio) || IS_ERR_OR_NULL(clock_gpio)) {
+        pr_err("GPIO not initialized\n");
+        return;
+    }
+    
     gpiod_set_value(data_gpio, bit ? 1 : 0);
     udelay(10);
     gpiod_set_value(clock_gpio, 1);
@@ -77,11 +82,21 @@ static void send_byte(u8 byte) {
 }
 
 static void send_start_signal(void) {
+    if (IS_ERR_OR_NULL(start_stop_gpio)) {
+        pr_err("Start/stop GPIO not initialized\n");
+        return;
+    }
+    
     gpiod_set_value(start_stop_gpio, 1);
     mdelay(5);
 }
 
 static void send_stop_signal(void) {
+    if (IS_ERR_OR_NULL(start_stop_gpio)) {
+        pr_err("Start/stop GPIO not initialized\n");
+        return;
+    }
+    
     gpiod_set_value(start_stop_gpio, 0);
     mdelay(5);
 }
@@ -111,13 +126,32 @@ static u16 calculate_header_checksum(struct image_header *h) {
 }
 
 static int send_data_block(u8 *data, size_t length) {
+    if (!data || length == 0) {
+        pr_err("Invalid data block parameters\n");
+        return -EINVAL;
+    }
+    
+    if (length > MAX_IMAGE_SIZE) {
+        pr_err("Data block too large: %zu bytes\n", length);
+        return -EINVAL;
+    }
+    
+    pr_debug("Sending data block: %zu bytes\n", length);
+    
     send_start_signal();
     
     for (size_t i = 0; i < length; i++) {
         send_byte(data[i]);
+        
+        // Add a small break every 1KB to prevent system freeze
+        if (i > 0 && (i % 1024) == 0) {
+            cond_resched();
+        }
     }
     
     send_stop_signal();
+    
+    pr_debug("Data block sent, waiting for response\n");
     return wait_for_response();
 }
 
@@ -127,18 +161,31 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     struct image_header header;
     u32 crc32_val;
     
-    if (count < sizeof(header)) return -EINVAL;
-    if (count > MAX_IMAGE_SIZE + sizeof(header)) return -EINVAL;
+    pr_info("TX write: %zu bytes\n", count);
     
-    if (!mutex_trylock(&tx_mutex)) return -EBUSY;
+    if (count < sizeof(header)) {
+        pr_err("Data too small: %zu < %zu\n", count, sizeof(header));
+        return -EINVAL;
+    }
+    if (count > MAX_IMAGE_SIZE + sizeof(header)) {
+        pr_err("Data too large: %zu > %zu\n", count, MAX_IMAGE_SIZE + sizeof(header));
+        return -EINVAL;
+    }
+    
+    if (!mutex_trylock(&tx_mutex)) {
+        pr_warn("TX device busy\n");
+        return -EBUSY;
+    }
     
     buffer = kmalloc(count, GFP_KERNEL);
     if (!buffer) {
+        pr_err("Failed to allocate %zu bytes\n", count);
         mutex_unlock(&tx_mutex);
         return -ENOMEM;
     }
     
     if (copy_from_user(buffer, user_buffer, count)) {
+        pr_err("Failed to copy data from user space\n");
         kfree(buffer);
         mutex_unlock(&tx_mutex);
         return -EFAULT;
@@ -146,8 +193,20 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     
     memcpy(&header, buffer, sizeof(header));
     
-    if (header.data_length != count - sizeof(header) || 
-        header.data_length > MAX_IMAGE_SIZE) {
+    pr_info("Header: width=%u, height=%u, data_length=%u, checksum=%u\n",
+            header.width, header.height, header.data_length, header.header_checksum);
+    
+    if (header.data_length != count - sizeof(header)) {
+        pr_err("Data length mismatch: header=%u, actual=%zu\n", 
+               header.data_length, count - sizeof(header));
+        kfree(buffer);
+        mutex_unlock(&tx_mutex);
+        return -EINVAL;
+    }
+    
+    if (header.data_length > MAX_IMAGE_SIZE) {
+        pr_err("Header data length too large: %u > %u\n", 
+               header.data_length, MAX_IMAGE_SIZE);
         kfree(buffer);
         mutex_unlock(&tx_mutex);
         return -EINVAL;
@@ -157,30 +216,49 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     memcpy(buffer, &header, sizeof(header));
     
     crc32_val = crc32(0, buffer + sizeof(header), header.data_length);
+    pr_info("Calculated CRC32: 0x%08x\n", crc32_val);
     
     for (int retry = 0; retry < MAX_RETRIES; retry++) {
+        pr_info("Transmission attempt %d/%d\n", retry + 1, MAX_RETRIES);
+        
         ack_received = nack_received = false;
         
+        pr_debug("Sending header (%zu bytes)\n", sizeof(header));
         ret = send_data_block((u8*)&header, sizeof(header));
         if (ret) {
+            pr_warn("Header send failed: %d\n", ret);
             if (ret == -ETIMEDOUT || ret == -ECOMM) continue;
             break;
         }
         
+        pr_debug("Sending image data (%u bytes)\n", header.data_length);
         ret = send_data_block(buffer + sizeof(header), header.data_length);
         if (ret) {
+            pr_warn("Data send failed: %d\n", ret);
             if (ret == -ETIMEDOUT || ret == -ECOMM) continue;
             break;
         }
         
+        pr_debug("Sending CRC32 (%zu bytes)\n", sizeof(crc32_val));
         ret = send_data_block((u8*)&crc32_val, sizeof(crc32_val));
-        if (ret == 0) break;
+        if (ret == 0) {
+            pr_info("Transmission successful on attempt %d\n", retry + 1);
+            break;
+        } else {
+            pr_warn("CRC32 send failed: %d\n", ret);
+        }
     }
     
     kfree(buffer);
     mutex_unlock(&tx_mutex);
     
-    return ret ? ret : count;
+    if (ret) {
+        pr_err("Transmission failed: %d\n", ret);
+        return ret;
+    } else {
+        pr_info("Write operation completed successfully\n");
+        return count;
+    }
 }
 
 static int tx_open(struct inode *inode, struct file *file) {
