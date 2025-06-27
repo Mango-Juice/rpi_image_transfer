@@ -12,9 +12,18 @@
 #include <linux/interrupt.h>
 #include <linux/crc32.h>
 #include <linux/platform_device.h>
-#include <linux/of.h>
-
-#define EPAPER_TX_MAGIC 'E'
+#include <linu        ack_gpio_state = gpiod_get_value(ack_gpio);
+        
+        if (last_error == -ETIMEDOUT) {
+            pr_warn("[epaper_tx] Handshake timeout on attempt %d (ACK GPIO: %d)\n", 
+                    retry + 1, ack_gpio_state);
+        } else if (last_error == -ECOMM) {
+            pr_warn("[epaper_tx] Handshake NACK on attempt %d (ACK GPIO: %d)\n", 
+                    retry + 1, ack_gpio_state);
+        } else {
+            pr_warn("[epaper_tx] Handshake error %d on attempt %d (ACK GPIO: %d)\n", 
+                    last_error, retry + 1, ack_gpio_state);
+        }ine EPAPER_TX_MAGIC 'E'
 #define EPAPER_TX_GET_STATUS    _IOR(EPAPER_TX_MAGIC, 1, struct tx_status_info)
 #define EPAPER_TX_GET_STATS     _IOR(EPAPER_TX_MAGIC, 2, struct tx_statistics)
 #define EPAPER_TX_RESET_STATS   _IO(EPAPER_TX_MAGIC, 3)
@@ -355,6 +364,10 @@ static int perform_handshake(void) {
         atomic_set(&ack_status, 0);
         
         pr_info("[epaper_tx] Sending HANDSHAKE_SYN (0x%02x)...\n", HANDSHAKE_SYN);
+        
+        atomic_set(&ack_received, 0);
+        atomic_set(&ack_status, 0);
+        
         send_byte(HANDSHAKE_SYN);
         
         ack_gpio_state = gpiod_get_value(ack_gpio);
@@ -364,9 +377,12 @@ static int perform_handshake(void) {
                 gpiod_get_value(data_gpio[2]));
         
         pr_info("[epaper_tx] Waiting for SYN-ACK response...\n");
-        ret = wait_for_ack();
         
-        if (ret == 0) {
+        ret = wait_event_timeout(ack_waitqueue, 
+                               atomic_read(&ack_received), 
+                               msecs_to_jiffies(TIMEOUT_MS));
+        
+        if (ret > 0 && atomic_read(&ack_status)) {
             current_state.handshake_complete = true;
             tx_stats.successful_handshakes++;
             pr_info("[epaper_tx] *** HANDSHAKE SUCCESS on attempt %d ***\n", retry + 1);
@@ -374,7 +390,7 @@ static int perform_handshake(void) {
             return 0;
         }
         
-        last_error = ret;
+        last_error = (ret == 0) ? -ETIMEDOUT : -ECOMM;
         ack_gpio_state = gpiod_get_value(ack_gpio);
         
         if (ret == -ETIMEDOUT) {

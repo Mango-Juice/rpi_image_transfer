@@ -246,6 +246,8 @@ static void process_3bit_data(u8 data) {
                 pr_info("[epaper_rx] *** HANDSHAKE SYN DETECTED: 0x%02x ***\n", byte);
                 pr_info("[epaper_rx] Handshake SYN received, sending ACK\n");
                 send_handshake_ack();
+                reset_rx_state();
+                pr_info("[epaper_rx] Handshake complete, ready for data packets\n");
             } else {
                 pr_info("[epaper_rx] Non-SYN byte in IDLE: 0x%02x (expected SYN: 0x%02x)\n", byte, HANDSHAKE_SYN);
                 if (byte > 250) {
