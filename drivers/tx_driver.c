@@ -330,18 +330,24 @@ static int tx_release(struct inode *inode, struct file *filp) {
 
 static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count, loff_t *off) {
     struct tx_packet packet;
-    u8 user_data[BUFFER_SIZE];
+    u8 *user_data;
     size_t bytes_sent = 0;
     int ret;
     
     if (count == 0) return 0;
     if (count > BUFFER_SIZE) count = BUFFER_SIZE;
     
+    user_data = kmalloc(count, GFP_KERNEL);
+    if (!user_data) {
+        return -ENOMEM;
+    }
+    
     if (current_state.error_state) {
         reset_tx_state();
     }
     
     if (copy_from_user(user_data, buf, count)) {
+        kfree(user_data);
         return -EFAULT;
     }
     
@@ -349,6 +355,7 @@ static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count,
         pr_info("[epaper_tx] Performing handshake before data transfer\n");
         ret = perform_handshake();
         if (ret < 0) {
+            kfree(user_data);
             return ret;
         }
     }
@@ -366,6 +373,7 @@ static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count,
         if (ret < 0) {
             pr_err("[epaper_tx] Failed to send packet at offset %zu\n", bytes_sent);
             reset_tx_state();
+            kfree(user_data);
             return bytes_sent > 0 ? bytes_sent : ret;
         }
         
@@ -373,6 +381,7 @@ static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count,
     }
     
     tx_stats.total_bytes_sent += count;
+    kfree(user_data);
     return count;
 }
 

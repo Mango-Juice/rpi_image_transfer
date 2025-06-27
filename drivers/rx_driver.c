@@ -15,6 +15,7 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/timer.h>
+#include <linux/poll.h>
 
 #define CLASS_NAME "epaper_rx"
 #define DEVICE_NAME "epaper_rx"
@@ -24,6 +25,15 @@
 #define DATA_PIN_COUNT 3
 #define STATE_TIMEOUT_MS 500
 #define HANDSHAKE_SYN 0x16
+
+enum rx_state {
+    RX_IDLE,
+    RX_SEQ_NUM,
+    RX_DATA_LEN,
+    RX_DATA,
+    RX_CRC32,
+    RX_STATE_MAX
+};
 
 struct rx_packet {
     u8 seq_num;
@@ -42,15 +52,6 @@ struct rx_state_info {
     unsigned long last_clock_time;
     int crc_byte_count;
     struct timer_list state_timer;
-};
-
-enum rx_state {
-    RX_IDLE,
-    RX_SEQ_NUM,
-    RX_DATA_LEN,
-    RX_DATA,
-    RX_CRC32,
-    RX_STATE_MAX
 };
 
 static dev_t dev_num;
@@ -101,7 +102,7 @@ static ssize_t rx_read(struct file *filp, char __user *buf, size_t count, loff_t
 static __poll_t rx_poll(struct file *filp, poll_table *wait);
 static int init_gpio(struct platform_device *pdev);
 static int rx_probe(struct platform_device *pdev);
-static int rx_remove(struct platform_device *pdev);
+static void rx_remove(struct platform_device *pdev);
 
 static void reset_rx_state(void) {
     rx_state.current_state = RX_IDLE;
@@ -587,7 +588,7 @@ cleanup_gpio:
     return ret;
 }
 
-static int rx_remove(struct platform_device *pdev) {
+static void rx_remove(struct platform_device *pdev) {
     int i;
     
     device_destroy(rx_class, dev_num);
@@ -605,7 +606,6 @@ static int rx_remove(struct platform_device *pdev) {
     del_timer_sync(&state_timeout_timer);
     
     pr_info("[epaper_rx] RX driver removed\n");
-    return 0;
 }
 
 static const struct of_device_id epaper_rx_of_match[] = {
