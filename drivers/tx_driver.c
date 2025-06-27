@@ -136,7 +136,6 @@ static void send_3bit_data(u8 data) {
     pr_debug("[epaper_tx] Sending 3-bit data: 0x%02x (GPIO5=%d, GPIO6=%d, GPIO12=%d)\n", 
              data, bit0, bit1, bit2);
     
-    // Set data lines
     gpiod_set_value(data_gpio[0], bit0);
     gpiod_set_value(data_gpio[1], bit1);
     gpiod_set_value(data_gpio[2], bit2);
@@ -144,7 +143,6 @@ static void send_3bit_data(u8 data) {
     wmb();
     mdelay(1);
     
-    // Verify data lines are set correctly
     int read_bit0 = gpiod_get_value(data_gpio[0]);
     int read_bit1 = gpiod_get_value(data_gpio[1]);
     int read_bit2 = gpiod_get_value(data_gpio[2]);
@@ -154,8 +152,6 @@ static void send_3bit_data(u8 data) {
                 bit0, bit1, bit2, read_bit0, read_bit1, read_bit2);
     }
     
-    // Clock pulse: LOW -> HIGH -> LOW
-    pr_debug("[epaper_tx] Clock pulse: 0->1->0\n");
     gpiod_set_value(clock_gpio, 0);
     mdelay(1);
     gpiod_set_value(clock_gpio, 1);
@@ -191,7 +187,6 @@ static int wait_for_ack(void) {
     atomic_set(&ack_received, 0);
     atomic_set(&ack_status, 0);
     
-    // Add periodic polling to monitor ACK GPIO during wait
     ret = wait_event_timeout(ack_waitqueue, 
                            ({
                                if (++poll_count % 100 == 0) {
@@ -319,29 +314,23 @@ static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     pr_info("[epaper_tx] *** ACK IRQ #%d *** GPIO=%d, time_since_last=%lums\n", 
             irq_count, current_ack, time_since_last);
     
-    // Debounce check - ignore if too soon after last IRQ
     if (time_before(current_time, last_ack_time + msecs_to_jiffies(5))) {
         pr_debug("[epaper_tx] IRQ debounced (too soon: %lums)\n", time_since_last);
         return IRQ_HANDLED;
     }
     
-    // Log the context when ACK is received
     pr_info("[epaper_tx] ACK context: transmission_active=%d, handshake_complete=%d, seq=%d\n",
             current_state.transmission_active, current_state.handshake_complete, 
             current_state.last_seq_sent);
     
-    if (current_ack) {
-        atomic_set(&ack_status, 1);
-        atomic_set(&ack_received, 1);
-        
-        smp_wmb();
-        wake_up(&ack_waitqueue);
-        last_ack_time = current_time;
-        
-        pr_info("[epaper_tx] *** ACK PROCESSED *** - wakeup sent to waiting thread\n");
-    } else {
-        pr_debug("[epaper_tx] ACK GPIO is LOW - ignoring\n");
-    }
+    atomic_set(&ack_status, 1);
+    atomic_set(&ack_received, 1);
+    
+    smp_wmb();
+    wake_up(&ack_waitqueue);
+    last_ack_time = current_time;
+    
+    pr_info("[epaper_tx] *** ACK PROCESSED *** - wakeup sent to waiting thread (GPIO=%d)\n", current_ack);
     
     return IRQ_HANDLED;
 }
@@ -353,7 +342,6 @@ static int perform_handshake(void) {
     
     pr_info("[epaper_tx] === HANDSHAKE SEQUENCE START ===\n");
     
-    // Check initial GPIO states
     ack_gpio_state = gpiod_get_value(ack_gpio);
     pr_info("[epaper_tx] Initial GPIO states - ACK:%d, Clock:%d, Data:[%d,%d,%d]\n",
             ack_gpio_state, gpiod_get_value(clock_gpio),
@@ -363,14 +351,12 @@ static int perform_handshake(void) {
     for (retry = 0; retry < MAX_RETRIES; retry++) {
         pr_info("[epaper_tx] === Handshake attempt %d/%d ===\n", retry + 1, MAX_RETRIES);
         
-        // Reset ACK state before sending
         atomic_set(&ack_received, 0);
         atomic_set(&ack_status, 0);
         
         pr_info("[epaper_tx] Sending HANDSHAKE_SYN (0x%02x)...\n", HANDSHAKE_SYN);
         send_byte(HANDSHAKE_SYN);
         
-        // Check GPIO state immediately after sending
         ack_gpio_state = gpiod_get_value(ack_gpio);
         pr_info("[epaper_tx] Post-SYN GPIO states - ACK:%d, Clock:%d, Data:[%d,%d,%d]\n",
                 ack_gpio_state, gpiod_get_value(clock_gpio),
