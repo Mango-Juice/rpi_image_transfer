@@ -129,17 +129,33 @@ static u32 calculate_crc32(struct tx_packet *packet) {
 }
 
 static void send_3bit_data(u8 data) {
+    int bit0 = (data >> 0) & 1;
+    int bit1 = (data >> 1) & 1;
+    int bit2 = (data >> 2) & 1;
     
-    pr_info("[epaper_tx] Sending 3-bit data: 0x%02x (GPIO5=%d, GPIO6=%d, GPIO12=%d)\n", 
-             data, (data >> 0) & 1, (data >> 1) & 1, (data >> 2) & 1);
+    pr_debug("[epaper_tx] Sending 3-bit data: 0x%02x (GPIO5=%d, GPIO6=%d, GPIO12=%d)\n", 
+             data, bit0, bit1, bit2);
     
-    gpiod_set_value(data_gpio[0], (data >> 0) & 1);
-    gpiod_set_value(data_gpio[1], (data >> 1) & 1);
-    gpiod_set_value(data_gpio[2], (data >> 2) & 1);
+    // Set data lines
+    gpiod_set_value(data_gpio[0], bit0);
+    gpiod_set_value(data_gpio[1], bit1);
+    gpiod_set_value(data_gpio[2], bit2);
     
     wmb();
     mdelay(1);
     
+    // Verify data lines are set correctly
+    int read_bit0 = gpiod_get_value(data_gpio[0]);
+    int read_bit1 = gpiod_get_value(data_gpio[1]);
+    int read_bit2 = gpiod_get_value(data_gpio[2]);
+    
+    if (read_bit0 != bit0 || read_bit1 != bit1 || read_bit2 != bit2) {
+        pr_warn("[epaper_tx] GPIO readback mismatch! Set: [%d,%d,%d], Read: [%d,%d,%d]\n",
+                bit0, bit1, bit2, read_bit0, read_bit1, read_bit2);
+    }
+    
+    // Clock pulse: LOW -> HIGH -> LOW
+    pr_debug("[epaper_tx] Clock pulse: 0->1->0\n");
     gpiod_set_value(clock_gpio, 0);
     mdelay(1);
     gpiod_set_value(clock_gpio, 1);
@@ -164,25 +180,54 @@ static void send_byte(u8 byte) {
 static int wait_for_ack(void) {
     int ret;
     unsigned long timeout_jiffies = msecs_to_jiffies(TIMEOUT_MS);
+    unsigned long start_time = jiffies;
+    int initial_ack_gpio, final_ack_gpio;
+    int poll_count = 0;
+    
+    initial_ack_gpio = gpiod_get_value(ack_gpio);
+    pr_info("[epaper_tx] Waiting for ACK (seq: %d, timeout: %dms, initial ACK GPIO: %d)\n", 
+            current_state.last_seq_sent, TIMEOUT_MS, initial_ack_gpio);
     
     atomic_set(&ack_received, 0);
+    atomic_set(&ack_status, 0);
     
+    // Add periodic polling to monitor ACK GPIO during wait
     ret = wait_event_timeout(ack_waitqueue, 
-                           atomic_read(&ack_received), 
+                           ({
+                               if (++poll_count % 100 == 0) {
+                                   int current_ack = gpiod_get_value(ack_gpio);
+                                   pr_debug("[epaper_tx] Poll %d: ACK GPIO=%d, ack_received=%d\n", 
+                                           poll_count/100, current_ack, atomic_read(&ack_received));
+                               }
+                               atomic_read(&ack_received);
+                           }), 
                            timeout_jiffies);
+    
+    unsigned long elapsed_ms = jiffies_to_msecs(jiffies - start_time);
+    final_ack_gpio = gpiod_get_value(ack_gpio);
+    
     if (ret == 0) {
-        pr_warn("[epaper_tx] ACK timeout (seq: %d, retry: %d)\n", 
-                current_state.last_seq_sent, current_state.retry_count);
+        pr_warn("[epaper_tx] *** ACK TIMEOUT *** after %lums (seq: %d, retry: %d)\n", 
+                elapsed_ms, current_state.last_seq_sent, current_state.retry_count);
+        pr_warn("[epaper_tx] ACK GPIO: initial=%d, final=%d, ack_received=%d, polls=%d\n", 
+                initial_ack_gpio, final_ack_gpio, atomic_read(&ack_received), poll_count);
+        pr_warn("[epaper_tx] Recommendation: Check RX logs, /proc/interrupts for ACK IRQ count\n");
         return -ETIMEDOUT;
     }
     
     smp_rmb();
     
     if (atomic_read(&ack_status)) {
-        pr_debug("[epaper_tx] ACK received for seq %d\n", current_state.last_seq_sent);
+        pr_info("[epaper_tx] *** ACK SUCCESS *** for seq %d (elapsed: %lums, polls: %d)\n", 
+                current_state.last_seq_sent, elapsed_ms, poll_count);
+        pr_info("[epaper_tx] ACK GPIO: initial=%d, final=%d\n", 
+                initial_ack_gpio, final_ack_gpio);
         return 0;
     } else {
-        pr_warn("[epaper_tx] NACK received for seq %d\n", current_state.last_seq_sent);
+        pr_warn("[epaper_tx] *** NACK RECEIVED *** for seq %d (elapsed: %lums)\n", 
+                current_state.last_seq_sent, elapsed_ms);
+        pr_warn("[epaper_tx] ACK GPIO: initial=%d, final=%d\n", 
+                initial_ack_gpio, final_ack_gpio);
         return -ECOMM;
     }
 }
@@ -258,67 +303,123 @@ static int send_packet(struct tx_packet *packet) {
 
 static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     static unsigned long last_ack_time = 0;
+    static int irq_count = 0;
     unsigned long current_time = jiffies;
     bool current_ack;
+    unsigned long time_since_last = 0;
     
-    if (time_before(current_time, last_ack_time + msecs_to_jiffies(10))) {
-        return IRQ_HANDLED;
+    irq_count++;
+    
+    if (last_ack_time != 0) {
+        time_since_last = jiffies_to_msecs(current_time - last_ack_time);
     }
     
     current_ack = gpiod_get_value(ack_gpio);
     
-    if (!current_ack) {
+    pr_info("[epaper_tx] *** ACK IRQ #%d *** GPIO=%d, time_since_last=%lums\n", 
+            irq_count, current_ack, time_since_last);
+    
+    // Debounce check - ignore if too soon after last IRQ
+    if (time_before(current_time, last_ack_time + msecs_to_jiffies(5))) {
+        pr_debug("[epaper_tx] IRQ debounced (too soon: %lums)\n", time_since_last);
         return IRQ_HANDLED;
     }
     
-    atomic_set(&ack_status, 1);
-    atomic_set(&ack_received, 1);
+    // Log the context when ACK is received
+    pr_info("[epaper_tx] ACK context: transmission_active=%d, handshake_complete=%d, seq=%d\n",
+            current_state.transmission_active, current_state.handshake_complete, 
+            current_state.last_seq_sent);
     
-    smp_wmb();
+    if (current_ack) {
+        atomic_set(&ack_status, 1);
+        atomic_set(&ack_received, 1);
+        
+        smp_wmb();
+        wake_up(&ack_waitqueue);
+        last_ack_time = current_time;
+        
+        pr_info("[epaper_tx] *** ACK PROCESSED *** - wakeup sent to waiting thread\n");
+    } else {
+        pr_debug("[epaper_tx] ACK GPIO is LOW - ignoring\n");
+    }
     
-    wake_up(&ack_waitqueue);
-    last_ack_time = current_time;
-    
-    pr_info("[epaper_tx] ACK received\n");
     return IRQ_HANDLED;
 }
 
 static int perform_handshake(void) {
     int retry, ret;
     int last_error = -ECONNREFUSED;
+    int ack_gpio_state;
+    
+    pr_info("[epaper_tx] === HANDSHAKE SEQUENCE START ===\n");
+    
+    // Check initial GPIO states
+    ack_gpio_state = gpiod_get_value(ack_gpio);
+    pr_info("[epaper_tx] Initial GPIO states - ACK:%d, Clock:%d, Data:[%d,%d,%d]\n",
+            ack_gpio_state, gpiod_get_value(clock_gpio),
+            gpiod_get_value(data_gpio[0]), gpiod_get_value(data_gpio[1]), 
+            gpiod_get_value(data_gpio[2]));
     
     for (retry = 0; retry < MAX_RETRIES; retry++) {
-        pr_info("[epaper_tx] Starting handshake (attempt %d)\n", retry + 1);
+        pr_info("[epaper_tx] === Handshake attempt %d/%d ===\n", retry + 1, MAX_RETRIES);
         
+        // Reset ACK state before sending
+        atomic_set(&ack_received, 0);
+        atomic_set(&ack_status, 0);
+        
+        pr_info("[epaper_tx] Sending HANDSHAKE_SYN (0x%02x)...\n", HANDSHAKE_SYN);
         send_byte(HANDSHAKE_SYN);
         
+        // Check GPIO state immediately after sending
+        ack_gpio_state = gpiod_get_value(ack_gpio);
+        pr_info("[epaper_tx] Post-SYN GPIO states - ACK:%d, Clock:%d, Data:[%d,%d,%d]\n",
+                ack_gpio_state, gpiod_get_value(clock_gpio),
+                gpiod_get_value(data_gpio[0]), gpiod_get_value(data_gpio[1]), 
+                gpiod_get_value(data_gpio[2]));
+        
+        pr_info("[epaper_tx] Waiting for SYN-ACK response...\n");
         ret = wait_for_ack();
+        
         if (ret == 0) {
             current_state.handshake_complete = true;
             tx_stats.successful_handshakes++;
-            pr_info("[epaper_tx] Handshake successful\n");
+            pr_info("[epaper_tx] *** HANDSHAKE SUCCESS on attempt %d ***\n", retry + 1);
+            pr_info("[epaper_tx] === HANDSHAKE SEQUENCE COMPLETE ===\n");
             return 0;
         }
         
         last_error = ret;
+        ack_gpio_state = gpiod_get_value(ack_gpio);
+        
         if (ret == -ETIMEDOUT) {
-            pr_warn("[epaper_tx] Handshake timeout (attempt %d)\n", retry + 1);
+            pr_warn("[epaper_tx] Handshake timeout on attempt %d (ACK GPIO: %d)\n", 
+                    retry + 1, ack_gpio_state);
         } else if (ret == -ECOMM) {
-            pr_warn("[epaper_tx] Handshake NACK (attempt %d)\n", retry + 1);
+            pr_warn("[epaper_tx] Handshake NACK on attempt %d (ACK GPIO: %d)\n", 
+                    retry + 1, ack_gpio_state);
+        } else {
+            pr_warn("[epaper_tx] Handshake error %d on attempt %d (ACK GPIO: %d)\n", 
+                    ret, retry + 1, ack_gpio_state);
         }
         
-        mdelay(80);
+        if (retry < MAX_RETRIES - 1) {
+            pr_info("[epaper_tx] Waiting 80ms before retry...\n");
+            mdelay(80);
+        }
     }
     
     tx_stats.failed_handshakes++;
+    pr_err("[epaper_tx] === HANDSHAKE SEQUENCE FAILED ===\n");
+    
     if (last_error == -ETIMEDOUT) {
-        pr_err("[epaper_tx] Handshake failed: receiver not responding after %d attempts\n", MAX_RETRIES);
+        pr_err("[epaper_tx] Final diagnosis: Receiver not responding after %d attempts\n", MAX_RETRIES);
+        pr_err("[epaper_tx] Check: 1) RX driver loaded? 2) ACK GPIO wiring? 3) RX receiving SYN?\n");
         return -EHOSTUNREACH;
     } else if (last_error == -ECOMM) {
-        pr_err("[epaper_tx] Handshake failed: receiver rejected connection after %d attempts\n", MAX_RETRIES);
+        pr_err("[epaper_tx] Final diagnosis: Receiver rejecting connection after %d attempts\n", MAX_RETRIES);
         return -ECONNREFUSED;
     } else {
-        pr_err("[epaper_tx] Handshake failed: unknown error %d after %d attempts\n", last_error, MAX_RETRIES);
+        pr_err("[epaper_tx] Final diagnosis: Unknown error %d after %d attempts\n", last_error, MAX_RETRIES);
         return last_error;
     }
 }

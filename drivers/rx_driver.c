@@ -157,21 +157,41 @@ static bool verify_crc32(struct rx_packet *packet) {
 }
 
 static void send_ack(bool success) {
-    pr_debug("[epaper_rx] Sending %s for seq %d\n", 
-             success ? "ACK" : "NACK", current_packet.seq_num);
+    int ack_value = success ? 1 : 0;
+    int initial_gpio, final_gpio;
     
-    gpiod_set_value(ack_gpio, success ? 1 : 0);
-    mdelay(5);  // Use mdelay for atomic context safety
+    initial_gpio = gpiod_get_value(ack_gpio);
+    
+    pr_info("[epaper_rx] === SENDING %s for seq %d ===\n", 
+             success ? "ACK" : "NACK", current_packet.seq_num);
+    pr_info("[epaper_rx] ACK GPIO before: %d, setting to: %d\n", initial_gpio, ack_value);
+    
+    // Make sure GPIO starts LOW
     gpiod_set_value(ack_gpio, 0);
-    mdelay(1);
+    mdelay(2);
+    
+    // Send the ACK/NACK pulse
+    gpiod_set_value(ack_gpio, ack_value);
+    mdelay(15);  // Increased pulse width for better detection
+    gpiod_set_value(ack_gpio, 0);
+    mdelay(2);
+    
+    final_gpio = gpiod_get_value(ack_gpio);
+    pr_info("[epaper_rx] %s sent, ACK GPIO after: %d\n", 
+            success ? "ACK" : "NACK", final_gpio);
+    
+    if (final_gpio != 0) {
+        pr_warn("[epaper_rx] WARNING: ACK GPIO did not return to LOW state!\n");
+    }
 }
 
 static void send_handshake_ack(void) {
     pr_info("[epaper_rx] Sending SYN-ACK\n");
     gpiod_set_value(ack_gpio, 1);
-    mdelay(5);  // Use mdelay for atomic context safety
+    mdelay(10);
     gpiod_set_value(ack_gpio, 0);
-    mdelay(1);
+    mdelay(2);
+    pr_info("[epaper_rx] SYN-ACK sent\n");
 }
 
 static u8 read_3bit_data(void) {
@@ -219,7 +239,6 @@ static void process_3bit_data(u8 data) {
         
         switch (rx_state.current_state) {
         case RX_IDLE:
-            // IDLE 상태에서는 항상 비트 정렬을 리셋
             rx_state.bit_position = 0;
             rx_state.current_byte = 0;
             
@@ -388,8 +407,6 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
             burst_count = 1;
         }
     }
-    
-    // Clock timing filter completely removed for debugging
     
     data = read_3bit_data();
     pr_info("[epaper_rx] Clock IRQ: data=0x%02x, state=%d\n", data, rx_state.current_state);
