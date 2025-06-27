@@ -220,9 +220,11 @@ static void process_3bit_data(u8 data) {
         switch (rx_state.current_state) {
         case RX_IDLE:
             if (byte == HANDSHAKE_SYN) {
+                pr_info("[epaper_rx] *** HANDSHAKE SYN DETECTED: 0x%02x ***\n", byte);
                 pr_info("[epaper_rx] Handshake SYN received, sending ACK\n");
                 send_handshake_ack();
             } else {
+                pr_info("[epaper_rx] Non-SYN byte in IDLE: 0x%02x (expected SYN: 0x%02x)\n", byte, HANDSHAKE_SYN);
                 if (byte > 250) {
                     pr_debug("[epaper_rx] Suspicious seq_num %d, ignoring\n", byte);
                     return;

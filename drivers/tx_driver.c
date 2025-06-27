@@ -129,9 +129,9 @@ static u32 calculate_crc32(struct tx_packet *packet) {
 }
 
 static void send_3bit_data(u8 data) {
-    unsigned long flags;
     
-    local_irq_save(flags);
+    pr_info("[epaper_tx] Sending 3-bit data: 0x%02x (GPIO5=%d, GPIO6=%d, GPIO12=%d)\n", 
+             data, (data >> 0) & 1, (data >> 1) & 1, (data >> 2) & 1);
     
     gpiod_set_value(data_gpio[0], (data >> 0) & 1);
     gpiod_set_value(data_gpio[1], (data >> 1) & 1);
@@ -140,18 +140,16 @@ static void send_3bit_data(u8 data) {
     wmb();
     udelay(5);
     
-    // 확실한 상승 엣지 생성을 위해 LOW부터 시작
     gpiod_set_value(clock_gpio, 0);  // 먼저 LOW 확보
     udelay(3);                       // 짧은 대기
     gpiod_set_value(clock_gpio, 1);  // 상승 엣지 생성
     udelay(5);
     gpiod_set_value(clock_gpio, 0);  // 하강 엣지
     udelay(5);
-    
-    local_irq_restore(flags);
 }
 
 static void send_byte(u8 byte) {
+    pr_info("[epaper_tx] Sending byte: 0x%02x\n", byte);
     send_3bit_data(byte & 0x07);
     send_3bit_data((byte >> 3) & 0x07);
     send_3bit_data((byte >> 6) & 0x03);
@@ -317,12 +315,15 @@ static int perform_handshake(void) {
 }
 
 static int tx_open(struct inode *inode, struct file *filp) {
+    pr_info("[epaper_tx] *** TX DEVICE OPEN CALLED ***\n");
+    
     if (!mutex_trylock(&tx_mutex)) {
+        pr_warn("[epaper_tx] Device busy\n");
         return -EBUSY;
     }
     
     reset_tx_state();
-    pr_info("[epaper_tx] Device opened\n");
+    pr_info("[epaper_tx] Device opened successfully\n");
     return 0;
 }
 
@@ -337,11 +338,14 @@ static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count,
     size_t bytes_sent = 0;
     int ret;
     
+    pr_info("[epaper_tx] *** TX WRITE CALLED: %zu bytes ***\n", count);
+    
     if (count == 0) return 0;
     if (count > BUFFER_SIZE) count = BUFFER_SIZE;
     
     user_data = kmalloc(count, GFP_KERNEL);
     if (!user_data) {
+        pr_err("[epaper_tx] Memory allocation failed\n");
         return -ENOMEM;
     }
     
@@ -350,14 +354,18 @@ static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count,
     }
     
     if (copy_from_user(user_data, buf, count)) {
+        pr_err("[epaper_tx] Copy from user failed\n");
         kfree(user_data);
         return -EFAULT;
     }
+    
+    pr_info("[epaper_tx] Data copied from user, starting transmission\n");
     
     if (!current_state.handshake_complete) {
         pr_info("[epaper_tx] Performing handshake before data transfer\n");
         ret = perform_handshake();
         if (ret < 0) {
+            pr_err("[epaper_tx] Handshake failed: %d\n", ret);
             kfree(user_data);
             return ret;
         }
