@@ -130,7 +130,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         del_timer(&timeout_timer);
         receiving_data = false;
         
-        if (data_ptr == (u8*)&header || data_ptr < (u8*)&header + sizeof(header)) {
+        if (data_ptr >= (u8*)&header && data_ptr <= (u8*)&header + sizeof(header)) {
             if (byte_count < sizeof(header)) {
                 pr_warn("RX: Incomplete header: %u < %zu bytes, sending NACK\n", 
                        byte_count, sizeof(header));
@@ -177,7 +177,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             data_ptr = image_buffer;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
             
-        } else if (data_ptr >= image_buffer && data_ptr <= image_buffer + header.data_length) {
+        } else if (data_ptr >= image_buffer && data_ptr < image_buffer + header.data_length) {
             if (byte_count != header.data_length) {
                 pr_warn("RX: Incomplete data: %u != %u bytes, sending NACK\n", 
                        byte_count, header.data_length);
