@@ -174,18 +174,33 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             byte_count = 0;
             data_ptr = image_buffer;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
-        } else if (byte_count == header.data_length + sizeof(u32)) {
+        } else if (byte_count == header.data_length) {
+            pr_info("RX: Data received (%u bytes), sending ACK, waiting for CRC32\n", 
+                   header.data_length);
+            send_ack();
+            
+            receiving_data = true;
+            byte_count = 0;
+            data_ptr = image_buffer + header.data_length;
+            mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
+        } else if (byte_count == sizeof(u32) && data_ptr == image_buffer + header.data_length) {
             received_crc = *(u32*)(image_buffer + header.data_length);
             expected_crc = crc32(0, image_buffer, header.data_length);
             
+            pr_info("RX: CRC32 received: 0x%08x, expected: 0x%08x\n", 
+                   received_crc, expected_crc);
+            
             if (received_crc == expected_crc) {
+                pr_info("RX: CRC32 OK, sending ACK, image ready\n");
                 send_ack();
                 image_ready = true;
                 wake_up_interruptible(&data_waitqueue);
             } else {
+                pr_warn("RX: CRC32 mismatch, sending NACK\n");
                 send_nack();
             }
         } else {
+            pr_warn("RX: Unexpected byte count: %u, sending NACK\n", byte_count);
             send_nack();
         }
     }
