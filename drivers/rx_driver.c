@@ -161,17 +161,17 @@ static void send_ack(bool success) {
              success ? "ACK" : "NACK", current_packet.seq_num);
     
     gpiod_set_value(ack_gpio, success ? 1 : 0);
-    usleep_range(4000, 6000);
+    mdelay(5);  // Use mdelay for atomic context safety
     gpiod_set_value(ack_gpio, 0);
-    usleep_range(800, 1200);
+    mdelay(1);
 }
 
 static void send_handshake_ack(void) {
     pr_info("[epaper_rx] Sending SYN-ACK\n");
     gpiod_set_value(ack_gpio, 1);
-    usleep_range(4000, 6000);
+    mdelay(5);  // Use mdelay for atomic context safety
     gpiod_set_value(ack_gpio, 0);
-    usleep_range(800, 1200);
+    mdelay(1);
 }
 
 static u8 read_3bit_data(void) {

@@ -138,14 +138,14 @@ static void send_3bit_data(u8 data) {
     gpiod_set_value(data_gpio[2], (data >> 2) & 1);
     
     wmb();
-    udelay(5);
+    mdelay(1);
     
-    gpiod_set_value(clock_gpio, 0);  // 먼저 LOW 확보
-    udelay(3);                       // 짧은 대기
-    gpiod_set_value(clock_gpio, 1);  // 상승 엣지 생성
-    udelay(5);
-    gpiod_set_value(clock_gpio, 0);  // 하강 엣지
-    udelay(5);
+    gpiod_set_value(clock_gpio, 0);
+    mdelay(1);
+    gpiod_set_value(clock_gpio, 1);
+    mdelay(1);
+    gpiod_set_value(clock_gpio, 0);
+    mdelay(1);
 }
 
 static void send_byte(u8 byte) {
@@ -230,8 +230,7 @@ static int send_packet(struct tx_packet *packet) {
         }
         
         if (current_state.retry_count < MAX_RETRIES) {
-            usleep_range(50000 + current_state.retry_count * 10000, 
-                        60000 + current_state.retry_count * 12000);
+            mdelay(50 + current_state.retry_count * 10);
         }
     }
     
@@ -256,13 +255,19 @@ static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     unsigned long current_time = jiffies;
     bool current_ack;
     
-    if (time_before(current_time, last_ack_time + msecs_to_jiffies(2))) {
+    // 더 긴 디바운싱 시간으로 노이즈 방지
+    if (time_before(current_time, last_ack_time + msecs_to_jiffies(10))) {
         return IRQ_HANDLED;
     }
     
     current_ack = gpiod_get_value(ack_gpio);
     
-    atomic_set(&ack_status, current_ack ? 1 : 0);
+    // ACK가 LOW일 때만 처리 (노이즈 방지)
+    if (!current_ack) {
+        return IRQ_HANDLED;
+    }
+    
+    atomic_set(&ack_status, 1);
     atomic_set(&ack_received, 1);
     
     smp_wmb();
@@ -270,7 +275,7 @@ static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     wake_up(&ack_waitqueue);
     last_ack_time = current_time;
     
-    pr_debug("[epaper_tx] %s received\n", current_ack ? "ACK" : "NACK");
+    pr_info("[epaper_tx] ACK received\n");
     return IRQ_HANDLED;
 }
 
@@ -298,7 +303,7 @@ static int perform_handshake(void) {
             pr_warn("[epaper_tx] Handshake NACK (attempt %d)\n", retry + 1);
         }
         
-        usleep_range(80000, 120000);
+        mdelay(80);
     }
     
     tx_stats.failed_handshakes++;
