@@ -181,6 +181,11 @@ static u8 read_3bit_data(void) {
             data |= (1 << i);
         }
     }
+    pr_info("[epaper_rx] Read 3-bit data: 0x%02x (GPIO19=%d, GPIO26=%d, GPIO20=%d)\n", 
+             data, 
+             gpiod_get_value(data_gpio[0]),
+             gpiod_get_value(data_gpio[1]), 
+             gpiod_get_value(data_gpio[2]));
     return data;
 }
 
@@ -202,10 +207,15 @@ static void process_3bit_data(u8 data) {
     rx_state.current_byte |= (data << rx_state.bit_position);
     rx_state.bit_position += 3;
     
+    pr_info("[epaper_rx] Process 3-bit: data=0x%02x, bit_pos=%d, current_byte=0x%02x\n", 
+             data, rx_state.bit_position, rx_state.current_byte);
+    
     if (rx_state.bit_position >= 8) {
         u8 byte = rx_state.current_byte & 0xFF;
         rx_state.current_byte >>= 8;
         rx_state.bit_position -= 8;
+        
+        pr_info("[epaper_rx] Assembled byte: 0x%02x in state %d\n", byte, rx_state.current_state);
         
         switch (rx_state.current_state) {
         case RX_IDLE:
@@ -373,11 +383,7 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
         }
     }
     
-    if (rx_state.last_clock_time != 0 && 
-        time_before(current_time, rx_state.last_clock_time + msecs_to_jiffies(1))) {
-        pr_debug("[epaper_rx] Clock too fast, ignoring\n");
-        return IRQ_HANDLED;
-    }
+    // Clock timing filter completely removed for debugging
     
     data = read_3bit_data();
     pr_info("[epaper_rx] Clock IRQ: data=0x%02x, state=%d\n", data, rx_state.current_state);
