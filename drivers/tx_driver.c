@@ -14,23 +14,6 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 
-/* Function declarations */
-static void reset_tx_state(void);
-static u32 calculate_crc32(struct tx_packet *packet);
-static void send_3bit_data(u8 data);
-static void send_byte(u8 byte);
-static int wait_for_ack(void);
-static int send_packet(struct tx_packet *packet);
-static irqreturn_t ack_irq_handler(int irq, void *dev_id);
-static int perform_handshake(void);
-static int tx_open(struct inode *inode, struct file *filp);
-static int tx_release(struct inode *inode, struct file *filp);
-static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count, loff_t *off);
-static long tx_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-static int init_gpio_pins(struct device *dev);
-static int epaper_tx_probe(struct platform_device *pdev);
-static void epaper_tx_remove(struct platform_device *pdev);
-
 #define EPAPER_TX_MAGIC 'E'
 #define EPAPER_TX_GET_STATUS    _IOR(EPAPER_TX_MAGIC, 1, struct tx_status_info)
 #define EPAPER_TX_GET_STATS     _IOR(EPAPER_TX_MAGIC, 2, struct tx_statistics)
@@ -104,6 +87,23 @@ static atomic_t ack_status = ATOMIC_INIT(0);
 static u8 sequence_number = 0;
 static struct tx_state current_state = {0};
 static struct tx_statistics tx_stats = {0};
+
+/* Function declarations */
+static void reset_tx_state(void);
+static u32 calculate_crc32(struct tx_packet *packet);
+static void send_3bit_data(u8 data);
+static void send_byte(u8 byte);
+static int wait_for_ack(void);
+static int send_packet(struct tx_packet *packet);
+static irqreturn_t ack_irq_handler(int irq, void *dev_id);
+static int perform_handshake(void);
+static int tx_open(struct inode *inode, struct file *filp);
+static int tx_release(struct inode *inode, struct file *filp);
+static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count, loff_t *off);
+static long tx_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+static int init_gpio_pins(struct device *dev);
+static int epaper_tx_probe(struct platform_device *pdev);
+static void epaper_tx_remove(struct platform_device *pdev);
 
 static void reset_tx_state(void) {
     current_state.transmission_active = false;

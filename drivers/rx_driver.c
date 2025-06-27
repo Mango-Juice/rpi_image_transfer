@@ -16,25 +16,6 @@
 #include <linux/of.h>
 #include <linux/timer.h>
 
-/* Function declarations */
-static void reset_rx_state(void);
-static void force_state_reset(const char *reason);
-static void state_timeout_callback(struct timer_list *t);
-static void update_state_timer(void);
-static bool verify_crc32(struct rx_packet *packet);
-static void send_ack(bool success);
-static void send_handshake_ack(void);
-static u8 read_3bit_data(void);
-static void process_3bit_data(u8 data);
-static irqreturn_t clock_irq_handler(int irq, void *dev_id);
-static int rx_open(struct inode *inode, struct file *filp);
-static int rx_release(struct inode *inode, struct file *filp);
-static ssize_t rx_read(struct file *filp, char __user *buf, size_t count, loff_t *off);
-static __poll_t rx_poll(struct file *filp, poll_table *wait);
-static int init_gpio(struct platform_device *pdev);
-static int rx_probe(struct platform_device *pdev);
-static int rx_remove(struct platform_device *pdev);
-
 #define CLASS_NAME "epaper_rx"
 #define DEVICE_NAME "epaper_rx"
 #define BUFFER_SIZE 4096
@@ -102,6 +83,25 @@ static u8 data_index = 0;
 static DECLARE_KFIFO(rx_fifo, u8, FIFO_SIZE);
 
 static struct timer_list state_timeout_timer;
+
+/* Function declarations */
+static void reset_rx_state(void);
+static void force_state_reset(const char *reason);
+static void state_timeout_callback(struct timer_list *t);
+static void update_state_timer(void);
+static bool verify_crc32(struct rx_packet *packet);
+static void send_ack(bool success);
+static void send_handshake_ack(void);
+static u8 read_3bit_data(void);
+static void process_3bit_data(u8 data);
+static irqreturn_t clock_irq_handler(int irq, void *dev_id);
+static int rx_open(struct inode *inode, struct file *filp);
+static int rx_release(struct inode *inode, struct file *filp);
+static ssize_t rx_read(struct file *filp, char __user *buf, size_t count, loff_t *off);
+static __poll_t rx_poll(struct file *filp, poll_table *wait);
+static int init_gpio(struct platform_device *pdev);
+static int rx_probe(struct platform_device *pdev);
+static int rx_remove(struct platform_device *pdev);
 
 static void reset_rx_state(void) {
     rx_state.current_state = RX_IDLE;
