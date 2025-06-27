@@ -1,7 +1,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/gpio/consumer.h>
-#include <linux/gpio.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
@@ -13,6 +12,8 @@
 #include <linux/interrupt.h>
 #include <linux/kfifo.h>
 #include <linux/crc32.h>
+#include <linux/platform_device.h>
+#include <linux/of.h>
 #include <linux/timer.h>
 #include <linux/poll.h>
 
@@ -24,13 +25,6 @@
 #define DATA_PIN_COUNT 3
 #define STATE_TIMEOUT_MS 500
 #define HANDSHAKE_SYN 0x16
-
-/* GPIO pin definitions */
-#define DATA_GPIO_0 4
-#define DATA_GPIO_1 5
-#define DATA_GPIO_2 6
-#define CLOCK_GPIO  18
-#define ACK_GPIO    19
 
 enum rx_state {
     RX_IDLE,
@@ -64,6 +58,7 @@ static dev_t dev_num;
 static struct cdev rx_cdev;
 static struct class *rx_class;
 static struct device *rx_device;
+static struct platform_device *pdev_global;
 
 static struct gpio_desc *data_gpio[DATA_PIN_COUNT];
 static struct gpio_desc *clock_gpio;
@@ -105,9 +100,9 @@ static int rx_open(struct inode *inode, struct file *filp);
 static int rx_release(struct inode *inode, struct file *filp);
 static ssize_t rx_read(struct file *filp, char __user *buf, size_t count, loff_t *off);
 static __poll_t rx_poll(struct file *filp, poll_table *wait);
-static int init_gpio(void);
-static void cleanup_gpio(void);
-static void cleanup_gpio(void);
+static int init_gpio(struct platform_device *pdev);
+static int rx_probe(struct platform_device *pdev);
+static void rx_remove(struct platform_device *pdev);
 
 static void reset_rx_state(void) {
     rx_state.current_state = RX_IDLE;
@@ -482,157 +477,66 @@ static const struct file_operations rx_fops = {
     .poll = rx_poll,
 };
 
-static int init_gpio(void) {
+static int init_gpio(struct platform_device *pdev) {
     int i, ret, irq;
-    int data_pins[DATA_PIN_COUNT] = {DATA_GPIO_0, DATA_GPIO_1, DATA_GPIO_2};
     
     for (i = 0; i < DATA_PIN_COUNT; i++) {
-        ret = gpio_request(data_pins[i], "epaper_rx_data");
-        if (ret) {
-            pr_err("[epaper_rx] Failed to request data GPIO %d: %d\n", data_pins[i], ret);
-            goto cleanup_gpio;
-        }
-        
-        ret = gpio_direction_input(data_pins[i]);
-        if (ret) {
-            pr_err("[epaper_rx] Failed to set data GPIO %d as input: %d\n", data_pins[i], ret);
-            gpio_free(data_pins[i]);
-            goto cleanup_gpio;
-        }
-        
-        data_gpio[i] = gpio_to_desc(data_pins[i]);
-        if (!data_gpio[i]) {
-            pr_err("[epaper_rx] Failed to get descriptor for data GPIO %d\n", data_pins[i]);
-            gpio_free(data_pins[i]);
-            ret = -ENODEV;
+        data_gpio[i] = gpiod_get_index(&pdev->dev, "rx-data", i, GPIOD_IN);
+        if (IS_ERR(data_gpio[i])) {
+            pr_err("[epaper_rx] Failed to get data GPIO %d: %ld\n", i, PTR_ERR(data_gpio[i]));
+            ret = PTR_ERR(data_gpio[i]);
             goto cleanup_gpio;
         }
     }
     
-    ret = gpio_request(CLOCK_GPIO, "epaper_rx_clock");
-    if (ret) {
-        pr_err("[epaper_rx] Failed to request clock GPIO: %d\n", ret);
+    clock_gpio = gpiod_get(&pdev->dev, "rx-clock", GPIOD_IN);
+    if (IS_ERR(clock_gpio)) {
+        pr_err("[epaper_rx] Failed to get clock GPIO: %ld\n", PTR_ERR(clock_gpio));
+        ret = PTR_ERR(clock_gpio);
         goto cleanup_gpio;
     }
     
-    ret = gpio_direction_input(CLOCK_GPIO);
-    if (ret) {
-        pr_err("[epaper_rx] Failed to set clock GPIO as input: %d\n", ret);
-        gpio_free(CLOCK_GPIO);
+    ack_gpio = gpiod_get(&pdev->dev, "rx-ack", GPIOD_OUT_LOW);
+    if (IS_ERR(ack_gpio)) {
+        pr_err("[epaper_rx] Failed to get ACK GPIO: %ld\n", PTR_ERR(ack_gpio));
+        ret = PTR_ERR(ack_gpio);
         goto cleanup_gpio;
-    }
-    
-    clock_gpio = gpio_to_desc(CLOCK_GPIO);
-    if (!clock_gpio) {
-        pr_err("[epaper_rx] Failed to get descriptor for clock GPIO\n");
-        gpio_free(CLOCK_GPIO);
-        ret = -ENODEV;
-        goto cleanup_gpio;
-    }
-    
-    ret = gpio_request(ACK_GPIO, "epaper_rx_ack");
-    if (ret) {
-        pr_err("[epaper_rx] Failed to request ACK GPIO: %d\n", ret);
-        goto cleanup_clock_gpio;
-    }
-    
-    ret = gpio_direction_output(ACK_GPIO, 0);
-    if (ret) {
-        pr_err("[epaper_rx] Failed to set ACK GPIO as output: %d\n", ret);
-        gpio_free(ACK_GPIO);
-        goto cleanup_clock_gpio;
-    }
-    
-    ack_gpio = gpio_to_desc(ACK_GPIO);
-    if (!ack_gpio) {
-        pr_err("[epaper_rx] Failed to get descriptor for ACK GPIO\n");
-        gpio_free(ACK_GPIO);
-        ret = -ENODEV;
-        goto cleanup_clock_gpio;
     }
     
     irq = gpiod_to_irq(clock_gpio);
     if (irq < 0) {
         pr_err("[epaper_rx] Failed to get clock IRQ\n");
         ret = irq;
-        goto cleanup_ack_gpio;
+        goto cleanup_gpio;
     }
     
     ret = request_irq(irq, clock_irq_handler, IRQF_TRIGGER_RISING, "epaper_clock", NULL);
     if (ret) {
         pr_err("[epaper_rx] Failed to request clock IRQ\n");
-        goto cleanup_ack_gpio;
+        goto cleanup_gpio;
     }
     
-    pr_info("[epaper_rx] GPIO initialization successful\n");
     return 0;
 
-cleanup_ack_gpio:
-    if (ack_gpio) {
-        gpio_free(ACK_GPIO);
-        ack_gpio = NULL;
-    }
-cleanup_clock_gpio:
-    if (clock_gpio) {
-        gpio_free(CLOCK_GPIO);
-        clock_gpio = NULL;
-    }
 cleanup_gpio:
+    if (!IS_ERR_OR_NULL(ack_gpio)) gpiod_put(ack_gpio);
+    if (!IS_ERR_OR_NULL(clock_gpio)) gpiod_put(clock_gpio);
     for (i = 0; i < DATA_PIN_COUNT; i++) {
-        if (data_gpio[i]) {
-            int pin_num = desc_to_gpio(data_gpio[i]);
-            gpio_free(pin_num);
-            data_gpio[i] = NULL;
-        }
+        if (!IS_ERR_OR_NULL(data_gpio[i])) gpiod_put(data_gpio[i]);
     }
     return ret;
 }
 
-// ...existing code...
-
-static void cleanup_gpio(void) {
-    int i, irq;
-    
-    irq = gpiod_to_irq(clock_gpio);
-    if (irq > 0) {
-        free_irq(irq, NULL);
-    }
-    
-    if (ack_gpio) {
-        gpio_free(ACK_GPIO);
-        ack_gpio = NULL;
-    }
-    
-    if (clock_gpio) {
-        gpio_free(CLOCK_GPIO);
-        clock_gpio = NULL;
-    }
-    
-    for (i = 0; i < DATA_PIN_COUNT; i++) {
-        if (data_gpio[i]) {
-            int pin_num = desc_to_gpio(data_gpio[i]);
-            gpio_free(pin_num);
-            data_gpio[i] = NULL;
-        }
-    }
-    
-    pr_info("[epaper_rx] GPIO cleanup complete\n");
-}
-
-static int __init rx_driver_init(void) {
+static int rx_probe(struct platform_device *pdev) {
     int ret;
     
-    pr_info("[epaper_rx] Initializing RX driver\n");
-    
+    pdev_global = pdev;
     INIT_KFIFO(rx_fifo);
     
     timer_setup(&state_timeout_timer, state_timeout_callback, 0);
     
-    ret = init_gpio();
-    if (ret) {
-        pr_err("[epaper_rx] GPIO initialization failed: %d\n", ret);
-        return ret;
-    }
+    ret = init_gpio(pdev);
+    if (ret) return ret;
     
     ret = alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME);
     if (ret < 0) {
@@ -663,7 +567,10 @@ static int __init rx_driver_init(void) {
         goto cleanup_class;
     }
     
-    pr_info("[epaper_rx] Driver initialized successfully - /dev/%s created\n", DEVICE_NAME);
+    timer_setup(&state_timeout_timer, 0, 0);
+    state_timeout_timer.function = state_timeout_callback;
+    
+    pr_info("[epaper_rx] RX driver initialized successfully\n");
     return 0;
     
 cleanup_class:
@@ -673,21 +580,55 @@ cleanup_cdev:
 cleanup_chrdev:
     unregister_chrdev_region(dev_num, 1);
 cleanup_gpio:
-    cleanup_gpio();
+    if (!IS_ERR_OR_NULL(ack_gpio)) gpiod_put(ack_gpio);
+    if (!IS_ERR_OR_NULL(clock_gpio)) gpiod_put(clock_gpio);
+    for (int i = 0; i < DATA_PIN_COUNT; i++) {
+        if (!IS_ERR_OR_NULL(data_gpio[i])) gpiod_put(data_gpio[i]);
+    }
     return ret;
 }
 
-static void __exit rx_driver_exit(void) {
+static void rx_remove(struct platform_device *pdev) {
+    int i;
+    
     device_destroy(rx_class, dev_num);
     class_destroy(rx_class);
     cdev_del(&rx_cdev);
     unregister_chrdev_region(dev_num, 1);
+    free_irq(gpiod_to_irq(clock_gpio), NULL);
     
-    cleanup_gpio();
+    gpiod_put(ack_gpio);
+    gpiod_put(clock_gpio);
+    for (i = 0; i < DATA_PIN_COUNT; i++) {
+        gpiod_put(data_gpio[i]);
+    }
     
     del_timer_sync(&state_timeout_timer);
     
-    pr_info("[epaper_rx] RX driver unloaded\n");
+    pr_info("[epaper_rx] RX driver removed\n");
+}
+
+static const struct of_device_id epaper_rx_of_match[] = {
+    { .compatible = "epaper,gpio-driver" },
+    { }
+};
+MODULE_DEVICE_TABLE(of, epaper_rx_of_match);
+
+static struct platform_driver epaper_rx_driver = {
+    .probe = rx_probe,
+    .remove = rx_remove,
+    .driver = {
+        .name = "epaper-rx",
+        .of_match_table = epaper_rx_of_match,
+    },
+};
+
+static int __init rx_driver_init(void) {
+    return platform_driver_register(&epaper_rx_driver);
+}
+
+static void __exit rx_driver_exit(void) {
+    platform_driver_unregister(&epaper_rx_driver);
 }
 
 module_init(rx_driver_init);
