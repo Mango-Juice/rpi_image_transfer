@@ -17,8 +17,8 @@ install: all dtbo
 	sudo insmod tx_driver.ko
 	sudo insmod rx_driver.ko
 	sudo cp epaper-gpio.dtbo /boot/overlays/
-	@if ! grep -q "dtoverlay=epaper-gpio" /boot/config.txt 2>/dev/null; then \
-		echo "dtoverlay=epaper-gpio" | sudo tee -a /boot/config.txt; \
+	@if ! grep -q "dtoverlay=epaper-gpio" /boot/firmware/config.txt 2>/dev/null; then \
+		echo "dtoverlay=epaper-gpio" | sudo tee -a /boot/firmware/config.txt; \
 		echo "!!!!!! REBOOTING REQUIRED !!!!!!: sudo reboot"; \
 	fi
 	sudo chmod 666 /dev/epaper_tx /dev/epaper_rx 2>/dev/null || true
