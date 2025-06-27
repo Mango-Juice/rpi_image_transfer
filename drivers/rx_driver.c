@@ -59,6 +59,15 @@ static volatile u32 byte_count;
 static volatile u8 *data_ptr;
 static volatile u32 expected_crc, received_crc;
 
+// Reception states
+typedef enum {
+    RX_STATE_HEADER,
+    RX_STATE_DATA,
+    RX_STATE_CRC32
+} rx_state_t;
+
+static volatile rx_state_t rx_state;
+
 static void send_ack(void) {
     gpiod_set_value(ack_gpio, 1);
     mdelay(10);
@@ -86,6 +95,7 @@ static void reset_rx_state(void) {
     byte_count = 0;
     current_byte = 0;
     data_ptr = NULL;
+    rx_state = RX_STATE_HEADER;
 }
 
 static u16 calculate_header_checksum(struct image_header *h) {
@@ -124,18 +134,18 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         timer_setup(&timeout_timer, timeout_handler, 0);
         mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
     } else {
-        pr_info("RX: Stop signal received, byte_count=%u\n", byte_count);
+        pr_info("RX: Stop signal received, byte_count=%u, state=%d\n", byte_count, rx_state);
         del_timer(&timeout_timer);  // Use del_timer() instead of del_timer_sync() in interrupt context
         receiving_data = false;
         
-        if (byte_count < sizeof(header)) {
-            pr_warn("RX: Incomplete header: %u < %zu bytes, sending NACK\n", 
-                   byte_count, sizeof(header));
-            send_nack();
-            return IRQ_HANDLED;
-        }
-        
-        if (byte_count == sizeof(header)) {
+        if (rx_state == RX_STATE_HEADER) {
+            if (byte_count < sizeof(header)) {
+                pr_warn("RX: Incomplete header: %u < %zu bytes, sending NACK\n", 
+                       byte_count, sizeof(header));
+                send_nack();
+                return IRQ_HANDLED;
+            }
+            
             pr_info("RX: Header received: width=%u, height=%u, data_length=%u, checksum=%u\n",
                    header.width, header.height, header.data_length, header.header_checksum);
             
@@ -173,8 +183,17 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             receiving_data = true;
             byte_count = 0;
             data_ptr = image_buffer;
+            rx_state = RX_STATE_DATA;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
-        } else if (byte_count == header.data_length && data_ptr == image_buffer + header.data_length) {
+            
+        } else if (rx_state == RX_STATE_DATA) {
+            if (byte_count != header.data_length) {
+                pr_warn("RX: Incomplete data: %u != %u bytes, sending NACK\n", 
+                       byte_count, header.data_length);
+                send_nack();
+                return IRQ_HANDLED;
+            }
+            
             pr_info("RX: Data received (%u bytes), sending ACK, waiting for CRC32\n", 
                    header.data_length);
             send_ack();
@@ -182,8 +201,17 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             receiving_data = true;
             byte_count = 0;
             data_ptr = image_buffer + header.data_length;
+            rx_state = RX_STATE_CRC32;
             mod_timer(&timeout_timer, jiffies + msecs_to_jiffies(TIMEOUT_MS));
-        } else if (byte_count == sizeof(u32) && data_ptr == image_buffer + header.data_length) {
+            
+        } else if (rx_state == RX_STATE_CRC32) {
+            if (byte_count != sizeof(u32)) {
+                pr_warn("RX: Incomplete CRC32: %u != %zu bytes, sending NACK\n", 
+                       byte_count, sizeof(u32));
+                send_nack();
+                return IRQ_HANDLED;
+            }
+            
             received_crc = *(u32*)(image_buffer + header.data_length);
             expected_crc = crc32(0, image_buffer, header.data_length);
             
@@ -200,7 +228,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
                 send_nack();
             }
         } else {
-            pr_warn("RX: Unexpected byte count: %u, sending NACK\n", byte_count);
+            pr_warn("RX: Unknown state: %d, sending NACK\n", rx_state);
             send_nack();
         }
     }
