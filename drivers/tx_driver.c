@@ -14,7 +14,23 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 
-/* ioctl 명령어 정의 */
+/* Function declarations */
+static void reset_tx_state(void);
+static u32 calculate_crc32(struct tx_packet *packet);
+static void send_3bit_data(u8 data);
+static void send_byte(u8 byte);
+static int wait_for_ack(void);
+static int send_packet(struct tx_packet *packet);
+static irqreturn_t ack_irq_handler(int irq, void *dev_id);
+static int perform_handshake(void);
+static int tx_open(struct inode *inode, struct file *filp);
+static int tx_release(struct inode *inode, struct file *filp);
+static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count, loff_t *off);
+static long tx_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+static int init_gpio_pins(struct device *dev);
+static int epaper_tx_probe(struct platform_device *pdev);
+static void epaper_tx_remove(struct platform_device *pdev);
+
 #define EPAPER_TX_MAGIC 'E'
 #define EPAPER_TX_GET_STATUS    _IOR(EPAPER_TX_MAGIC, 1, struct tx_status_info)
 #define EPAPER_TX_GET_STATS     _IOR(EPAPER_TX_MAGIC, 2, struct tx_statistics)
@@ -54,7 +70,6 @@ static const struct of_device_id epaper_tx_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, epaper_tx_of_match);
 
-static struct platform_device *tx_pdev;
 static struct device *tx_gpio_dev;
 
 struct tx_packet {
@@ -88,8 +103,6 @@ static atomic_t ack_status = ATOMIC_INIT(0);
 
 static u8 sequence_number = 0;
 static struct tx_state current_state = {0};
-
-/* 통계 정보 */
 static struct tx_statistics tx_stats = {0};
 
 static void reset_tx_state(void) {
@@ -153,23 +166,23 @@ static int wait_for_ack(void) {
     if (ret == 0) {
         pr_warn("[epaper_tx] ACK timeout (seq: %d, retry: %d)\n", 
                 current_state.last_seq_sent, current_state.retry_count);
-        return -ETIMEDOUT;  /* 타임아웃 명확히 구분 */
+        return -ETIMEDOUT;
     }
     
     smp_rmb();
     
     if (atomic_read(&ack_status)) {
         pr_debug("[epaper_tx] ACK received for seq %d\n", current_state.last_seq_sent);
-        return 0;  /* 성공 */
+        return 0;
     } else {
         pr_warn("[epaper_tx] NACK received for seq %d\n", current_state.last_seq_sent);
-        return -ECOMM;  /* 통신 오류 (NACK) */
+        return -ECOMM;
     }
 }
 
 static int send_packet(struct tx_packet *packet) {
     int ret;
-    int last_error = -EIO;  /* 기본 IO 오류 */
+    int last_error = -EIO;
     
     packet->crc32 = calculate_crc32(packet);
     current_state.last_seq_sent = packet->seq_num;
@@ -194,7 +207,6 @@ static int send_packet(struct tx_packet *packet) {
         
         ret = wait_for_ack();
         if (ret == 0) {
-            /* 성공 */
             tx_stats.total_packets_sent++;
             pr_info("[epaper_tx] Packet %d sent successfully after %d attempts\n", 
                    packet->seq_num, current_state.retry_count + 1);
@@ -202,7 +214,6 @@ static int send_packet(struct tx_packet *packet) {
             return 0;
         }
         
-        /* 실패 원인 기록 및 통계 */
         last_error = ret;
         current_state.retry_count++;
         tx_stats.total_retries++;
@@ -223,7 +234,6 @@ static int send_packet(struct tx_packet *packet) {
         }
     }
     
-    /* 모든 재시도 실패 - 구체적 오류 리포트 */
     if (last_error == -ETIMEDOUT) {
         pr_err("[epaper_tx] Packet %d failed: persistent timeout after %d retries\n", 
                packet->seq_num, MAX_RETRIES);
@@ -237,7 +247,7 @@ static int send_packet(struct tx_packet *packet) {
     
     current_state.transmission_active = false;
     current_state.error_state = true;
-    return last_error;  /* 마지막 실패 원인 반환 */
+    return last_error;
 }
 
 static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
@@ -261,6 +271,46 @@ static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
     
     pr_debug("[epaper_tx] %s received\n", current_ack ? "ACK" : "NACK");
     return IRQ_HANDLED;
+}
+
+static int perform_handshake(void) {
+    int retry, ret;
+    int last_error = -ECONNREFUSED;
+    
+    for (retry = 0; retry < MAX_RETRIES; retry++) {
+        pr_info("[epaper_tx] Starting handshake (attempt %d)\n", retry + 1);
+        
+        send_byte(HANDSHAKE_SYN);
+        
+        ret = wait_for_ack();
+        if (ret == 0) {
+            current_state.handshake_complete = true;
+            tx_stats.successful_handshakes++;
+            pr_info("[epaper_tx] Handshake successful\n");
+            return 0;
+        }
+        
+        last_error = ret;
+        if (ret == -ETIMEDOUT) {
+            pr_warn("[epaper_tx] Handshake timeout (attempt %d)\n", retry + 1);
+        } else if (ret == -ECOMM) {
+            pr_warn("[epaper_tx] Handshake NACK (attempt %d)\n", retry + 1);
+        }
+        
+        usleep_range(80000, 120000);
+    }
+    
+    tx_stats.failed_handshakes++;
+    if (last_error == -ETIMEDOUT) {
+        pr_err("[epaper_tx] Handshake failed: receiver not responding after %d attempts\n", MAX_RETRIES);
+        return -EHOSTUNREACH;
+    } else if (last_error == -ECOMM) {
+        pr_err("[epaper_tx] Handshake failed: receiver rejected connection after %d attempts\n", MAX_RETRIES);
+        return -ECONNREFUSED;
+    } else {
+        pr_err("[epaper_tx] Handshake failed: unknown error %d after %d attempts\n", last_error, MAX_RETRIES);
+        return last_error;
+    }
 }
 
 static int tx_open(struct inode *inode, struct file *filp) {
@@ -299,7 +349,7 @@ static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count,
         pr_info("[epaper_tx] Performing handshake before data transfer\n");
         ret = perform_handshake();
         if (ret < 0) {
-            return ret;  /* 핸드셰이크 실패의 구체적 errno 반환 */
+            return ret;
         }
     }
     
@@ -328,7 +378,6 @@ static ssize_t tx_write(struct file *filp, const char __user *buf, size_t count,
 
 static long tx_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     struct tx_status_info status;
-    struct tx_statistics stats;
     
     switch (cmd) {
     case EPAPER_TX_GET_STATUS:
@@ -455,7 +504,6 @@ static int epaper_tx_probe(struct platform_device *pdev) {
         goto cleanup_gpio;
     }
     
-    /* 문자 디바이스 생성 - 하드웨어 발견 후에만 */
     ret = alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME);
     if (ret < 0) {
         pr_err("[epaper_tx] Failed to allocate device number\n");
@@ -500,16 +548,14 @@ cleanup_gpio:
     return ret;
 }
 
-static int epaper_tx_remove(struct platform_device *pdev) {
+static void epaper_tx_remove(struct platform_device *pdev) {
     int i;
     
-    /* 문자 디바이스 정리 */
     device_destroy(tx_class, dev_num);
     class_destroy(tx_class);
     cdev_del(&tx_cdev);
     unregister_chrdev_region(dev_num, 1);
     
-    /* IRQ 및 GPIO 정리 */
     free_irq(gpiod_to_irq(ack_gpio), NULL);
     
     for (i = 0; i < DATA_PIN_COUNT; i++) {
@@ -528,7 +574,6 @@ static int epaper_tx_remove(struct platform_device *pdev) {
     }
     
     pr_info("[epaper_tx] Platform device removed\n");
-    return 0;
 }
 
 static struct platform_driver epaper_tx_platform_driver = {
@@ -543,12 +588,10 @@ static struct platform_driver epaper_tx_platform_driver = {
 static int __init tx_driver_init(void) {
     pr_info("[epaper_tx] Initializing TX driver\n");
     
-    /* 플랫폼 드라이버만 등록 - 문자 디바이스는 probe에서 생성 */
     return platform_driver_register(&epaper_tx_platform_driver);
 }
 
 static void __exit tx_driver_exit(void) {
-    /* 플랫폼 드라이버 해제 - remove에서 문자 디바이스 정리됨 */
     platform_driver_unregister(&epaper_tx_platform_driver);
     pr_info("[epaper_tx] TX driver unloaded\n");
 }
@@ -559,44 +602,3 @@ module_exit(tx_driver_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("System Programming Assignment");
 MODULE_DESCRIPTION("E-paper TX driver for reliable image data transmission");
-
-static int perform_handshake(void) {
-    int retry, ret;
-    int last_error = -ECONNREFUSED;  /* 기본 연결 거부 */
-    
-    for (retry = 0; retry < MAX_RETRIES; retry++) {
-        pr_info("[epaper_tx] Starting handshake (attempt %d)\n", retry + 1);
-        
-        send_byte(HANDSHAKE_SYN);
-        
-        ret = wait_for_ack();
-        if (ret == 0) {
-            current_state.handshake_complete = true;
-            tx_stats.successful_handshakes++;
-            pr_info("[epaper_tx] Handshake successful\n");
-            return 0;
-        }
-        
-        /* 핸드셰이크 실패 원인 기록 */
-        last_error = ret;
-        if (ret == -ETIMEDOUT) {
-            pr_warn("[epaper_tx] Handshake timeout (attempt %d)\n", retry + 1);
-        } else if (ret == -ECOMM) {
-            pr_warn("[epaper_tx] Handshake NACK (attempt %d)\n", retry + 1);
-        }
-        
-        usleep_range(80000, 120000);
-    }
-    
-    tx_stats.failed_handshakes++;
-    if (last_error == -ETIMEDOUT) {
-        pr_err("[epaper_tx] Handshake failed: receiver not responding after %d attempts\n", MAX_RETRIES);
-        return -EHOSTUNREACH;  /* 수신자에게 도달할 수 없음 */
-    } else if (last_error == -ECOMM) {
-        pr_err("[epaper_tx] Handshake failed: receiver rejected connection after %d attempts\n", MAX_RETRIES);
-        return -ECONNREFUSED;  /* 연결 거부 */
-    } else {
-        pr_err("[epaper_tx] Handshake failed: unknown error %d after %d attempts\n", last_error, MAX_RETRIES);
-        return last_error;
-    }
-}

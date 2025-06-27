@@ -16,6 +16,25 @@
 #include <linux/of.h>
 #include <linux/timer.h>
 
+/* Function declarations */
+static void reset_rx_state(void);
+static void force_state_reset(const char *reason);
+static void state_timeout_callback(struct timer_list *t);
+static void update_state_timer(void);
+static bool verify_crc32(struct rx_packet *packet);
+static void send_ack(bool success);
+static void send_handshake_ack(void);
+static u8 read_3bit_data(void);
+static void process_3bit_data(u8 data);
+static irqreturn_t clock_irq_handler(int irq, void *dev_id);
+static int rx_open(struct inode *inode, struct file *filp);
+static int rx_release(struct inode *inode, struct file *filp);
+static ssize_t rx_read(struct file *filp, char __user *buf, size_t count, loff_t *off);
+static __poll_t rx_poll(struct file *filp, poll_table *wait);
+static int init_gpio(struct platform_device *pdev);
+static int rx_probe(struct platform_device *pdev);
+static int rx_remove(struct platform_device *pdev);
+
 #define CLASS_NAME "epaper_rx"
 #define DEVICE_NAME "epaper_rx"
 #define BUFFER_SIZE 4096
@@ -50,7 +69,7 @@ enum rx_state {
     RX_DATA_LEN,
     RX_DATA,
     RX_CRC32,
-    RX_STATE_MAX  /* 상태 검증용 */
+    RX_STATE_MAX
 };
 
 static dev_t dev_num;
@@ -177,7 +196,7 @@ static void process_3bit_data(u8 data) {
         return;
     }
     
-    consecutive_invalid_count = 0;  /* 유효한 데이터 수신 시 카운터 리셋 */
+    consecutive_invalid_count = 0;
     
     rx_state.current_byte |= (data << rx_state.bit_position);
     rx_state.bit_position += 3;
@@ -193,8 +212,7 @@ static void process_3bit_data(u8 data) {
                 pr_info("[epaper_rx] Handshake SYN received, sending ACK\n");
                 send_handshake_ack();
             } else {
-                /* 잠재적 시퀀스 번호 - 합리적 범위 확인 */
-                if (byte > 250) {  /* 시퀀스 번호가 너무 크면 노이즈로 간주 */
+                if (byte > 250) {
                     pr_debug("[epaper_rx] Suspicious seq_num %d, ignoring\n", byte);
                     return;
                 }
@@ -331,15 +349,13 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
     u8 data;
     static unsigned long burst_start_time = 0;
     static int burst_count = 0;
-    const int MAX_BURST_COUNT = 1000;  /* 1초 내 최대 클록 수 */
+    const int MAX_BURST_COUNT = 1000;
     
-    /* 클록 버스트 감지 및 방어 */
     if (burst_start_time == 0) {
         burst_start_time = current_time;
         burst_count = 1;
     } else {
         if (time_before(current_time, burst_start_time + HZ)) {
-            /* 1초 이내 */
             burst_count++;
             if (burst_count > MAX_BURST_COUNT) {
                 pr_warn("[epaper_rx] Clock burst detected (%d clocks/sec), resetting\n", burst_count);
@@ -351,13 +367,11 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
                 return IRQ_HANDLED;
             }
         } else {
-            /* 1초 경과, 카운터 리셋 */
             burst_start_time = current_time;
             burst_count = 1;
         }
     }
     
-    /* 클록 간격이 너무 빠름 */
     if (rx_state.last_clock_time != 0 && 
         time_before(current_time, rx_state.last_clock_time + msecs_to_jiffies(1))) {
         pr_debug("[epaper_rx] Clock too fast, ignoring\n");
@@ -366,13 +380,11 @@ static irqreturn_t clock_irq_handler(int irq, void *dev_id) {
     
     data = read_3bit_data();
     
-    /* 스핀락 보호 하에서 상태 처리 */
     if (!spin_trylock_irqsave(&rx_state_lock, flags)) {
         pr_debug("[epaper_rx] State lock busy, dropping clock\n");
         return IRQ_HANDLED;
     }
     
-    /* 상태 검증 */
     if (rx_state.current_state >= RX_STATE_MAX) {
         force_state_reset("Invalid state in IRQ handler");
         spin_unlock_irqrestore(&rx_state_lock, flags);
