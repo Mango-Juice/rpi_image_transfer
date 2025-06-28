@@ -27,6 +27,10 @@ enum rx_state {
     RX_STATE_COMPLETE = 3
 };
 
+// Add data tracking variables
+static volatile u32 total_data_received;
+static volatile u32 expected_data_length;
+
 struct image_header {
     u16 width;
     u16 height;
@@ -97,6 +101,8 @@ static void reset_rx_state(void) {
     current_byte = 0;
     data_ptr = NULL;
     current_rx_state = RX_STATE_HEADER;
+    total_data_received = 0;
+    expected_data_length = 0;
 }
 
 static u16 calculate_header_checksum(struct image_header *h) {
@@ -137,7 +143,7 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
         if (current_rx_state == RX_STATE_HEADER) {
             data_ptr = (u8*)&header;
         } else if (current_rx_state == RX_STATE_DATA) {
-            data_ptr = image_buffer;
+            data_ptr = image_buffer + total_data_received;
         } else if (current_rx_state == RX_STATE_CRC32) {
             data_ptr = image_buffer + header.data_length;
         }
@@ -197,21 +203,36 @@ static irqreturn_t start_stop_irq_handler(int irq, void *dev_id) {
             send_ack();
             
             current_rx_state = RX_STATE_DATA;
+            total_data_received = 0;
+            expected_data_length = header.data_length;
             
         } else if (current_rx_state == RX_STATE_DATA) {
-            if (byte_count != header.data_length) {
-                pr_warn("RX: Incomplete data: %u != %u bytes, sending NACK\n", 
-                       byte_count, header.data_length);
+            // Accumulate data chunks
+            total_data_received += byte_count;
+            
+            pr_info("RX: Data chunk received (%u bytes), total: %u/%u\n", 
+                   byte_count, total_data_received, expected_data_length);
+            
+            if (total_data_received > expected_data_length) {
+                pr_warn("RX: Too much data received: %u > %u, sending NACK\n", 
+                       total_data_received, expected_data_length);
                 send_nack();
                 current_rx_state = RX_STATE_HEADER;
                 return IRQ_HANDLED;
             }
             
-            pr_info("RX: Data received (%u bytes), sending ACK, waiting for CRC32\n", 
-                   header.data_length);
             send_ack();
             
-            current_rx_state = RX_STATE_CRC32;
+            if (total_data_received == expected_data_length) {
+                pr_info("RX: All data received (%u bytes), waiting for CRC32\n", 
+                       total_data_received);
+                current_rx_state = RX_STATE_CRC32;
+            } else {
+                pr_info("RX: Waiting for more data (%u/%u bytes received)\n",
+                       total_data_received, expected_data_length);
+                // Stay in DATA state, update data_ptr for next chunk
+                data_ptr = image_buffer + total_data_received;
+            }
             
         } else if (current_rx_state == RX_STATE_CRC32) {
             if (byte_count != sizeof(u32)) {

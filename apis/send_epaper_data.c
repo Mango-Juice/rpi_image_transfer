@@ -84,47 +84,46 @@ static void apply_dithering(float *gray, int width, int height) {
 }
 
 static bool send_with_progress(int fd, const unsigned char *data, size_t size) {
-    const size_t chunk_size = 1024;
+    printf("Sending %zu bytes to TX driver...\n", size);
     
-    for (size_t sent = 0; sent < size; sent += chunk_size) {
-        size_t to_send = (sent + chunk_size > size) ? (size - sent) : chunk_size;
-        
-        ssize_t bytes_written = write(fd, data + sent, to_send);
-        if (bytes_written != (ssize_t)to_send) {
-            if (bytes_written < 0) {
-                switch (errno) {
-                case ETIMEDOUT:
-                    fprintf(stderr, "\nError: Connection timeout at byte %zu/%zu\n", sent, size);
-                    break;
-                case ECOMM:
-                    fprintf(stderr, "\nError: Communication error (NACK) at byte %zu/%zu\n", sent, size);
-                    break;
-                case EHOSTUNREACH:
-                    fprintf(stderr, "\nError: Receiver not reachable at byte %zu/%zu\n", sent, size);
-                    break;
-                case ECONNREFUSED:
-                    fprintf(stderr, "\nError: Connection refused at byte %zu/%zu\n", sent, size);
-                    break;
-                case ECONNRESET:
-                    fprintf(stderr, "\nError: Connection reset by receiver at byte %zu/%zu\n", sent, size);
-                    break;
-                default:
-                    fprintf(stderr, "\nWrite failed at byte %zu/%zu: %s\n", sent, size, strerror(errno));
-                    break;
-                }
-            } else {
-                fprintf(stderr, "\nError: Partial write at byte %zu/%zu (%zd/%zu bytes written)\n", 
-                       sent, size, bytes_written, to_send);
+    // Send everything at once - TX driver will handle chunking internally
+    ssize_t bytes_written = write(fd, data, size);
+    if (bytes_written != (ssize_t)size) {
+        if (bytes_written < 0) {
+            switch (errno) {
+            case ETIMEDOUT:
+                fprintf(stderr, "Error: Connection timeout during transmission\n");
+                break;
+            case ECOMM:
+                fprintf(stderr, "Error: Communication error (NACK) during transmission\n");
+                break;
+            case EHOSTUNREACH:
+                fprintf(stderr, "Error: Receiver not reachable\n");
+                break;
+            case ECONNREFUSED:
+                fprintf(stderr, "Error: Connection refused\n");
+                break;
+            case ECONNRESET:
+                fprintf(stderr, "Error: Connection reset by receiver\n");
+                break;
+            case EBUSY:
+                fprintf(stderr, "Error: TX device is busy\n");
+                break;
+            case EINVAL:
+                fprintf(stderr, "Error: Invalid data size or format\n");
+                break;
+            default:
+                fprintf(stderr, "Write failed: %s\n", strerror(errno));
+                break;
             }
-            return false;
+        } else {
+            fprintf(stderr, "Error: Partial write (%zd/%zu bytes written)\n", 
+                   bytes_written, size);
         }
-        
-        int progress = (sent * 100) / size;
-        printf("\rProgress: %d%% (%zu/%zu bytes)", progress, sent, size);
-        fflush(stdout);
-        usleep(1000);
+        return false;
     }
-    printf("\n");
+    
+    printf("Successfully sent %zu bytes to TX driver\n", size);
     return true;
 }
 
