@@ -19,9 +19,8 @@
 #define MAX_IMAGE_SIZE (1920 * 1080)
 #define TIMEOUT_MS 2000
 #define MAX_RETRIES 3
-#define MAX_CHUNK_SIZE 1024  // Maximum chunk size for data transmission
+#define MAX_CHUNK_SIZE 1024
 
-// Debug mode: skip ACK/NACK waiting for testing without receiver
 static bool debug_skip_ack = false;
 module_param(debug_skip_ack, bool, 0644);
 MODULE_PARM_DESC(debug_skip_ack, "Skip ACK/NACK waiting for testing without receiver");
@@ -135,7 +134,6 @@ static int send_data_block(u8 *data, size_t length) {
     send_stop_signal();
     
     if (debug_skip_ack) {
-        pr_debug("Skipping ACK/NACK wait (debug mode)\n");
         return 0;
     }
     
@@ -205,7 +203,6 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     crc32_val = crc32(0, buffer + sizeof(header), header.data_length);
     pr_info("Calculated CRC32: 0x%08x\n", crc32_val);
     
-    // Print first few bytes of data for debugging
     pr_info("First 16 bytes of data: %*ph\n", 
             min((int)header.data_length, 16), buffer + sizeof(header));
     
@@ -224,7 +221,6 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
         
         pr_info("Sending image data (%u bytes)\n", header.data_length);
         
-        // Send data in chunks if it's larger than MAX_CHUNK_SIZE
         u8 *data_ptr = buffer + sizeof(header);
         u32 remaining = header.data_length;
         u32 sent = 0;
@@ -237,14 +233,14 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
             if (ret) {
                 pr_warn("Data chunk send failed at offset %u: %d\n", sent, ret);
                 if (ret == -ETIMEDOUT || ret == -ECOMM) break;
-                goto transmission_failed;
+                break;
             }
             
             sent += chunk_size;
             remaining -= chunk_size;
         }
         
-        if (ret) continue;  // Retry if chunk transmission failed
+        if (ret) continue;
         
         pr_info("Data sent successfully, now sending CRC32 (%zu bytes): 0x%08x\n", 
                sizeof(crc32_val), crc32_val);
