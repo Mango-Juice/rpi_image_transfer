@@ -15,51 +15,20 @@
 
 ## 구현된 시스템: E-paper 이미지 전송 시스템
 
-### 응용 서비스: 이미지 전송 시스템
-
+### 응용 서비스
 - **목적**: 라즈베리파이 간 이미지 데이터의 안전하고 신뢰성 있는 전송
 - **프로토콜**: 5-pin 시리얼 통신 (Clock, Data, Start/Stop, ACK, NACK)
 - **특징**: CRC32 검증, 자동 재전송, 타임아웃 처리
 
-### 통신 프로토콜 설계: 5-pin 시리얼 프로토콜
+### 통신 프로토콜: 5-pin 시리얼 프로토콜
+- **물리적 연결**: Clock, Data, Start/Stop, ACK, NACK 신호
+- **동작 방식**: 동기식 시리얼 전송, 블록 단위 전송, CRC32 체크섬
+- **오류 복구**: 자동 재전송 (최대 3회), 2초 타임아웃
 
-- **물리적 연결**:
-
-  - Clock (1핀): 시리얼 동기화 클럭
-  - Data (1핀): 1-bit 시리얼 데이터
-  - Start/Stop (1핀): 전송 시작/종료 신호
-  - ACK (1핀): 수신 확인 응답
-  - NACK (1핀): 수신 오류 응답
-
-- **동작 방식**:
-  - 동기식 시리얼 전송
-  - 블록 단위 전송 (헤더 + 데이터 + CRC32)
-  - 오류 검증: CRC32 체크섬
-  - 재전송: 최대 3회 자동 재시도
-  - 타임아웃: 2초 응답 대기
-
-### SW 설계 및 구현 완료
-
-- **디바이스 드라이버**:
-
-  - ✅ `tx_driver.c`: 송신 드라이버 (5-pin 시리얼 프로토콜)
-  - ✅ `rx_driver.c`: 수신 드라이버 (5-pin 시리얼 프로토콜)
-  - ✅ `file_operations` 구조체 기반 `open`, `close`, `read`, `write` 제공
-  - ✅ `<linux/gpio/consumer.h>`의 `gpiod` 함수 사용
-  - ✅ 디바이스 트리 연동 (`epaper-gpio.dts`)
-
-- **API 라이브러리**:
-
-  - ✅ `send_epaper_data.c/h`: 송신 API
-  - ✅ `receive_epaper_data.c/h`: 수신 API
-  - ✅ 이미지 처리 및 형식 변환 지원
-  - ✅ 정적/동적 라이브러리 빌드
-
-- **응용 프로그램**:
-  - ✅ `epaper_send`: 이미지 송신 프로그램
-  - ✅ `epaper_receive`: 이미지 수신 프로그램
-  - ✅ 직접 제작한 디바이스 드라이버를 통해서만 GPIO 제어
-  - ✅ 다양한 이미지 형식 지원 (JPEG, PNG, BMP, GIF)
+### SW 구현 완료
+- **디바이스 드라이버**: tx_driver.c, rx_driver.c (5-pin 시리얼 프로토콜)
+- **API 라이브러리**: send_epaper_data.c/h, receive_epaper_data.c/h
+- **응용 프로그램**: epaper_send, epaper_receive
 
 ---
 

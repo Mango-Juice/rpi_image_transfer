@@ -8,7 +8,6 @@
 #include <math.h>
 #include <errno.h>
 
-// Define ECOMM if not available
 #ifndef ECOMM
 #define ECOMM 70
 #endif
@@ -86,7 +85,6 @@ static void apply_dithering(float *gray, int width, int height) {
 static bool send_with_progress(int fd, const unsigned char *data, size_t size) {
     printf("Sending %zu bytes to TX driver...\n", size);
     
-    // Send everything at once - TX driver will handle chunking internally
     ssize_t bytes_written = write(fd, data, size);
     if (bytes_written != (ssize_t)size) {
         if (bytes_written < 0) {
@@ -96,15 +94,6 @@ static bool send_with_progress(int fd, const unsigned char *data, size_t size) {
                 break;
             case ECOMM:
                 fprintf(stderr, "Error: Communication error (NACK) during transmission\n");
-                break;
-            case EHOSTUNREACH:
-                fprintf(stderr, "Error: Receiver not reachable\n");
-                break;
-            case ECONNREFUSED:
-                fprintf(stderr, "Error: Connection refused\n");
-                break;
-            case ECONNRESET:
-                fprintf(stderr, "Error: Connection reset by receiver\n");
                 break;
             case EBUSY:
                 fprintf(stderr, "Error: TX device is busy\n");
@@ -256,13 +245,6 @@ bool epaper_send_image_advanced(int fd, const char *image_path, const epaper_con
     if (processed_img != img) free(processed_img);
     stbi_image_free(img);
     
-    // Create image header for new protocol
-    if (final_width > 65535 || final_height > 65535) {
-        fprintf(stderr, "Error: Image dimensions too large for protocol (max 65535x65535)\n");
-        free(mono_buffer);
-        return false;
-    }
-    
     if (mono_size > 0xFFFFFFFF) {
         fprintf(stderr, "Error: Image data too large for protocol\n");
         free(mono_buffer);
@@ -273,9 +255,8 @@ bool epaper_send_image_advanced(int fd, const char *image_path, const epaper_con
     header.width = (uint16_t)final_width;
     header.height = (uint16_t)final_height;
     header.data_length = (uint32_t)mono_size;
-    header.header_checksum = 0; // Will be calculated by kernel driver
+    header.header_checksum = 0;
     
-    // Create buffer for header + image data
     size_t total_size = sizeof(header) + mono_size;
     unsigned char *send_buffer = malloc(total_size);
     if (!send_buffer) {
@@ -284,14 +265,11 @@ bool epaper_send_image_advanced(int fd, const char *image_path, const epaper_con
         return false;
     }
     
-    // Copy header and image data to send buffer
     memcpy(send_buffer, &header, sizeof(header));
     memcpy(send_buffer + sizeof(header), mono_buffer, mono_size);
     
     printf("Sending image: %dx%d, %zu bytes data\n", final_width, final_height, mono_size);
-    printf("Total transmission: %zu bytes (header + data)\n", total_size);
     
-    // Send everything at once - kernel driver will handle protocol details
     bool success = send_with_progress(fd, send_buffer, total_size);
     
     if (success) {

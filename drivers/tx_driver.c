@@ -55,14 +55,12 @@ static volatile bool ack_received, nack_received;
 static int ack_irq, nack_irq;
 
 static irqreturn_t ack_irq_handler(int irq, void *dev_id) {
-    pr_info("TX: ACK interrupt received\n");
     ack_received = true;
     wake_up_interruptible(&response_waitqueue);
     return IRQ_HANDLED;
 }
 
 static irqreturn_t nack_irq_handler(int irq, void *dev_id) {
-    pr_info("TX: NACK interrupt received\n");
     nack_received = true;
     wake_up_interruptible(&response_waitqueue);
     return IRQ_HANDLED;
@@ -94,29 +92,24 @@ static void send_stop_signal(void) {
 }
 
 static int wait_for_response(void) {
-    pr_debug("TX: Waiting for ACK/NACK response...\n");
     int ret = wait_event_timeout(response_waitqueue, 
                                 ack_received || nack_received,
                                 msecs_to_jiffies(TIMEOUT_MS));
     
     if (ret == 0) {
-        pr_warn("TX: Timeout waiting for response\n");
         return -ETIMEDOUT;
     }
     
     if (nack_received) {
-        pr_info("TX: NACK received\n");
         nack_received = false;
         return -ECOMM;
     }
     
     if (ack_received) {
-        pr_info("TX: ACK received\n");
         ack_received = false;
         return 0;
     }
     
-    pr_warn("TX: Unknown response state\n");
     return -EIO;
 }
 
@@ -149,28 +142,23 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     pr_info("TX write: %zu bytes\n", count);
     
     if (count < sizeof(header)) {
-        pr_err("Data too small: %zu < %zu\n", count, sizeof(header));
         return -EINVAL;
     }
     if (count > MAX_IMAGE_SIZE + sizeof(header)) {
-        pr_err("Data too large: %zu > %zu\n", count, MAX_IMAGE_SIZE + sizeof(header));
         return -EINVAL;
     }
     
     if (!mutex_trylock(&tx_mutex)) {
-        pr_warn("TX device busy\n");
         return -EBUSY;
     }
     
     buffer = kmalloc(count, GFP_KERNEL);
     if (!buffer) {
-        pr_err("Failed to allocate %zu bytes\n", count);
         mutex_unlock(&tx_mutex);
         return -ENOMEM;
     }
     
     if (copy_from_user(buffer, user_buffer, count)) {
-        pr_err("Failed to copy data from user space\n");
         kfree(buffer);
         mutex_unlock(&tx_mutex);
         return -EFAULT;
@@ -178,20 +166,13 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     
     memcpy(&header, buffer, sizeof(header));
     
-    pr_info("Header: width=%u, height=%u, data_length=%u, checksum=%u\n",
-            header.width, header.height, header.data_length, header.header_checksum);
-    
     if (header.data_length != count - sizeof(header)) {
-        pr_err("Data length mismatch: header=%u, actual=%zu\n", 
-               header.data_length, count - sizeof(header));
         kfree(buffer);
         mutex_unlock(&tx_mutex);
         return -EINVAL;
     }
     
     if (header.data_length > MAX_IMAGE_SIZE) {
-        pr_err("Header data length too large: %u > %u\n", 
-               header.data_length, MAX_IMAGE_SIZE);
         kfree(buffer);
         mutex_unlock(&tx_mutex);
         return -EINVAL;
@@ -201,25 +182,15 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     memcpy(buffer, &header, sizeof(header));
     
     crc32_val = crc32(0, buffer + sizeof(header), header.data_length);
-    pr_info("Calculated CRC32: 0x%08x\n", crc32_val);
-    
-    pr_info("First 16 bytes of data: %*ph\n", 
-            min((int)header.data_length, 16), buffer + sizeof(header));
     
     for (int retry = 0; retry < MAX_RETRIES; retry++) {
-        pr_info("Transmission attempt %d/%d\n", retry + 1, MAX_RETRIES);
-        
         ack_received = nack_received = false;
         
-        pr_debug("Sending header (%zu bytes)\n", sizeof(header));
         ret = send_data_block((u8*)&header, sizeof(header));
         if (ret) {
-            pr_warn("Header send failed: %d\n", ret);
             if (ret == -ETIMEDOUT || ret == -ECOMM) continue;
             break;
         }
-        
-        pr_info("Sending image data (%u bytes)\n", header.data_length);
         
         u8 *data_ptr = buffer + sizeof(header);
         u32 remaining = header.data_length;
@@ -227,11 +198,9 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
         
         while (remaining > 0) {
             u32 chunk_size = min(remaining, (u32)MAX_CHUNK_SIZE);
-            pr_debug("Sending data chunk: %u bytes (offset %u)\n", chunk_size, sent);
             
             ret = send_data_block(data_ptr + sent, chunk_size);
             if (ret) {
-                pr_warn("Data chunk send failed at offset %u: %d\n", sent, ret);
                 if (ret == -ETIMEDOUT || ret == -ECOMM) break;
                 break;
             }
@@ -242,14 +211,9 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
         
         if (ret) continue;
         
-        pr_info("Data sent successfully, now sending CRC32 (%zu bytes): 0x%08x\n", 
-               sizeof(crc32_val), crc32_val);
         ret = send_data_block((u8*)&crc32_val, sizeof(crc32_val));
         if (ret == 0) {
-            pr_info("Transmission successful on attempt %d\n", retry + 1);
             break;
-        } else {
-            pr_warn("CRC32 send failed: %d\n", ret);
         }
     }
     
@@ -257,10 +221,8 @@ static ssize_t tx_write(struct file *file, const char __user *user_buffer, size_
     mutex_unlock(&tx_mutex);
     
     if (ret) {
-        pr_err("Transmission failed: %d\n", ret);
         return ret;
     } else {
-        pr_info("Write operation completed successfully\n");
         return count;
     }
 }
