@@ -61,13 +61,13 @@ make
 
 ### 물리적 연결 (5-pin)
 
-| 신호       | 송신측 | 수신측 | 설명              |
-|-----------|--------|--------|-------------------|
-| CLOCK     | OUT    | IN     | 시리얼 동기화     |
-| DATA      | OUT    | IN     | 1-bit 데이터      |
-| START/STOP| OUT    | IN     | 전송 제어         |
-| ACK       | IN     | OUT    | 수신 확인         |
-| NACK      | IN     | OUT    | 수신 오류         |
+| 신호       | 송신측 | 수신측 | 설명          |
+| ---------- | ------ | ------ | ------------- |
+| CLOCK      | OUT    | IN     | 시리얼 동기화 |
+| DATA       | OUT    | IN     | 1-bit 데이터  |
+| START/STOP | OUT    | IN     | 전송 제어     |
+| ACK        | IN     | OUT    | 수신 확인     |
+| NACK       | IN     | OUT    | 수신 오류     |
 
 ### 프로토콜 특징
 
@@ -132,12 +132,14 @@ epaper_rx_close(fd);
 ### 전체 워크플로우
 
 **송신측 (라즈베리파이 A)**
+
 ```bash
 sudo insmod tx_driver.ko
 ./epaper_send -w 400 -h 300 photo.jpg
 ```
 
 **수신측 (라즈베리파이 B)**
+
 ```bash
 sudo insmod rx_driver.ko
 ./epaper_receive -o received.pbm

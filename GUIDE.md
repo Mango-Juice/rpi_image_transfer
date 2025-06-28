@@ -16,16 +16,19 @@
 ## 구현된 시스템: E-paper 이미지 전송 시스템
 
 ### 응용 서비스
+
 - **목적**: 라즈베리파이 간 이미지 데이터의 안전하고 신뢰성 있는 전송
 - **프로토콜**: 5-pin 시리얼 통신 (Clock, Data, Start/Stop, ACK, NACK)
 - **특징**: CRC32 검증, 자동 재전송, 타임아웃 처리
 
 ### 통신 프로토콜: 5-pin 시리얼 프로토콜
+
 - **물리적 연결**: Clock, Data, Start/Stop, ACK, NACK 신호
 - **동작 방식**: 동기식 시리얼 전송, 블록 단위 전송, CRC32 체크섬
 - **오류 복구**: 자동 재전송 (최대 3회), 2초 타임아웃
 
 ### SW 구현 완료
+
 - **디바이스 드라이버**: tx_driver.c, rx_driver.c (5-pin 시리얼 프로토콜)
 - **API 라이브러리**: send_epaper_data.c/h, receive_epaper_data.c/h
 - **응용 프로그램**: epaper_send, epaper_receive
