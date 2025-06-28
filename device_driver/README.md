@@ -39,10 +39,9 @@ CRC32 (4 bytes): 데이터 무결성 검증
 ### 1. 컴파일 및 로드
 
 ```bash
-cd drivers
+make clean
 make
-sudo insmod tx_driver.ko  # 송신측
-sudo insmod rx_driver.ko  # 수신측
+make install
 ls -l /dev/epaper_*       # 디바이스 노드 확인
 ```
 
@@ -97,68 +96,8 @@ sudo dmesg -w | grep epaper
 lsmod | grep epaper
 ```
 
-## ⚡ 성능 특성
-
-- **시리얼 클럭**: ~100kHz
-- **최대 이미지**: 1920x1080 픽셀
-- **신뢰성**: CRC32 + 재전송으로 100% 무결성
-- **타임아웃**: 2초 응답 대기
-
-## 🐛 문제 해결
-
-### 일반적인 문제들
-
-1. **모듈 로드 실패**: `sudo apt-get install linux-headers-$(uname -r)`
-2. **디바이스 노드 없음**: 디바이스 트리 설정 후 재부팅
-3. **GPIO 권한 오류**: `sudo usermod -a -G gpio $USER`
-4. **핸드셰이크 실패**: 케이블 연결 및 GPIO 핀 확인
-
-### 디버깅 명령어
-
-```bash
-# 모듈 상태 확인
-lsmod | grep epaper
-
-# GPIO 사용 현황
-cat /sys/kernel/debug/gpio
-
-# 디바이스 트리 확인
-cat /proc/device-tree/gpio/epaper-*/compatible
-
-# IRQ 사용 현황
-cat /proc/interrupts | grep epaper
-```
-
-## 🔧 고급 설정
-
-### 커널 모듈 매개변수
-
-현재 버전은 매개변수를 지원하지 않습니다. 모든 설정은 디바이스 트리를 통해 이루어집니다.
-
-### 성능 튜닝
-
-1. **클럭 속도 조정**: 디바이스 트리에서 GPIO 드라이브 강도 설정
-2. **IRQ 우선순위**: 실시간 커널 사용 시 IRQ 우선순위 조정
-3. **버퍼 크기**: 소스 코드에서 FIFO_SIZE 조정 후 재컴파일
-
-## 📊 제한사항
-
-- **최대 이미지 크기**: 1920x1080 픽셀
-- **GPIO 핀 수**: 5개 (Clock + Data + Start/Stop + ACK + NACK)
-- **동시 사용**: 각 디바이스당 하나의 프로세스만
-- **플랫폼**: 라즈베리파이 및 호환 SBC
-- **데이터 형식**: 바이너리 이미지 데이터 (width + height + data)
-
 ## 🗂️ 모듈 제거
 
 ```bash
-# 드라이버 언로드
-sudo rmmod tx_driver
-sudo rmmod rx_driver
-
-# 디바이스 노드 자동 제거됨
+make uninstall
 ```
-
-## 📄 라이선스
-
-GPL v2 라이선스 하에 배포됩니다.
